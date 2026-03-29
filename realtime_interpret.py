@@ -13,137 +13,89 @@ from difflib import SequenceMatcher
 import pygame
 import vosk
 import pyaudio
+import threading
+import queue
+try:
+    import websocket  # websocket-client library
+except ImportError:
+    websocket = None
 
-# Debug mode
-DEBUG = True
+# Debug mode - set to True to show position counter in corner
+DEBUG = False
+
+# WebSocket server URL
+GRAPHICS_SERVER_URL = "ws://localhost:8000/ws"
 
 
 class State:
-    """Application state manager."""
+    """Application state manager for WebSocket graphics."""
     
-    def __init__(self, screen_width=800, screen_height=600):
-        self.words = []  # Word buffer (not displayed)
-        self.objects = []  # List of displayable objects (circles, etc.)
+    def __init__(self, ws_client=None):
+        self.ws_client = ws_client
+        self.objects = []  # List of graphics objects as dicts
+        self.variables = {}  # Map variable names to object indices
         self.next_var_id = 0
-        self.screen_width = screen_width
-        self.screen_height = screen_height
-        self.center_x = screen_width // 2
-        self.center_y = screen_height // 2
     
-    def add_word(self, word):
-        """Add a word to the word buffer."""
-        self.words.append(word)
-    
-    def add_object(self, obj):
-        """Add a displayable object to state."""
-        var_name = f"_var{self.next_var_id}"
-        self.next_var_id += 1
-        self.objects.append(obj)
+    def add_object(self, obj_dict, var_name=None):
+        """Add a displayable object to state and send to server."""
+        if var_name is None:
+            var_name = f"_var{self.next_var_id}"
+            self.next_var_id += 1
+        
+        obj_index = len(self.objects)
+        self.objects.append(obj_dict)
+        self.variables[var_name] = obj_index
+        
+        # Send to graphics server
+        if self.ws_client:
+            self.ws_client.send_command({
+                "command": "add_object",
+                "object": obj_dict
+            })
+        
         return var_name
     
-    def get_displayable_objects(self):
-        """Get all objects that should be displayed."""
-        return self.objects
-
-
-class Circle:
-    """Circle display object."""
+    def update_object(self, var_name, updates):
+        """Update an existing object by variable name."""
+        if var_name not in self.variables:
+            print(f"Error: variable '{var_name}' not found")
+            return False
+        
+        obj_index = self.variables[var_name]
+        if obj_index >= len(self.objects):
+            print(f"Error: object index {obj_index} out of range")
+            return False
+        
+        # Update local state
+        self.objects[obj_index].update(updates)
+        print(f"DEBUG: Updated local object at index {obj_index}: {self.objects[obj_index]}")
+        
+        # Send update to graphics server
+        if self.ws_client:
+            cmd = {
+                "command": "update_object",
+                "index": obj_index,
+                "updates": updates
+            }
+            print(f"DEBUG: Sending to server: {cmd}")
+            print(f"DEBUG: ws_client.connected = {self.ws_client.connected}")
+            self.ws_client.send_command(cmd)
+        else:
+            print("DEBUG: ws_client is None!")
+        
+        return True
     
-    def __init__(self, radius, color, x=None, y=None):
-        self.radius = radius
-        self.color = self.parse_color(color)
-        self.x = x
-        self.y = y
-    
-    def parse_color(self, color_str):
-        """Parse color string to RGB tuple."""
-        color_str = color_str.strip('"\'')
-        
-        colors = {
-            'red': (255, 0, 0),
-            'green': (0, 255, 0),
-            'blue': (0, 0, 255),
-            'yellow': (255, 255, 0),
-            'cyan': (0, 255, 255),
-            'magenta': (255, 0, 255),
-            'white': (255, 255, 255),
-            'black': (0, 0, 0),
-            'orange': (255, 165, 0),
-            'purple': (128, 0, 128),
-        }
-        
-        color_lower = color_str.lower()
-        if color_lower in colors:
-            return colors[color_lower]
-        
-        if color_str.startswith('#'):
-            hex_str = color_str[1:]
-            if len(hex_str) == 6:
-                r = int(hex_str[0:2], 16)
-                g = int(hex_str[2:4], 16)
-                b = int(hex_str[4:6], 16)
-                return (r, g, b)
-        
-        return (255, 255, 255)
-    
-    def draw(self, surface, default_x=None, default_y=None):
-        """Draw the circle on the given surface."""
-        x = self.x if self.x is not None else default_x
-        y = self.y if self.y is not None else default_y
-        pygame.draw.circle(surface, self.color, (int(x), int(y)), int(self.radius))
-
-
-class Square:
-    """Square display object."""
-    
-    def __init__(self, size, color, x=None, y=None):
-        self.size = size
-        self.color = self.parse_color(color)
-        self.x = x
-        self.y = y
-    
-    def parse_color(self, color_str):
-        """Parse color string to RGB tuple."""
-        color_str = color_str.strip('"\'')
-        
-        colors = {
-            'red': (255, 0, 0),
-            'green': (0, 255, 0),
-            'blue': (0, 0, 255),
-            'yellow': (255, 255, 0),
-            'cyan': (0, 255, 255),
-            'magenta': (255, 0, 255),
-            'white': (255, 255, 255),
-            'black': (0, 0, 0),
-            'orange': (255, 165, 0),
-            'purple': (128, 0, 128),
-        }
-        
-        color_lower = color_str.lower()
-        if color_lower in colors:
-            return colors[color_lower]
-        
-        if color_str.startswith('#'):
-            hex_str = color_str[1:]
-            if len(hex_str) == 6:
-                r = int(hex_str[0:2], 16)
-                g = int(hex_str[2:4], 16)
-                b = int(hex_str[4:6], 16)
-                return (r, g, b)
-        
-        return (255, 255, 255)
-    
-    def draw(self, surface, default_x=None, default_y=None):
-        """Draw the square on the given surface."""
-        x = self.x if self.x is not None else default_x
-        y = self.y if self.y is not None else default_y
-        half_size = self.size / 2
-        rect = pygame.Rect(int(x - half_size), int(y - half_size), int(self.size), int(self.size))
-        pygame.draw.rect(surface, self.color, rect)
+    def clear(self):
+        """Clear all graphics."""
+        self.objects = []
+        if self.ws_client:
+            self.ws_client.send_command({
+                "command": "clear"
+            })
 
 
 class Interpreter:
-    """Instruction interpreter."""
+    """Instruction interpreter - sends commands via WebSocket."""
     
     def __init__(self, state):
         self.state = state
@@ -155,13 +107,21 @@ class Interpreter:
         if not parts:
             return
         
+        # Check for variable assignment: varname = command args
+        var_name = None
+        if len(parts) >= 3 and parts[1] == '=':
+            var_name = parts[0]
+            parts = parts[2:]  # Remove "varname =" from parts
+        
         command = parts[0].lower()
         args = parts[1:]
         
         if command == 'circle':
-            self.execute_circle(args)
+            self.execute_circle(args, var_name)
         elif command == 'square':
-            self.execute_square(args)
+            self.execute_square(args, var_name)
+        elif command == 'scale':
+            self.execute_scale(args)
         else:
             print(f"Unknown command: {command}")
     
@@ -171,7 +131,7 @@ class Interpreter:
         parts = re.findall(pattern, text)
         return parts
     
-    def execute_circle(self, args):
+    def execute_circle(self, args, var_name=None):
         """Execute circle command: circle RADIUS COLOR"""
         if len(args) < 2:
             print(f"Error: circle requires 2 arguments (radius, color), got {len(args)}")
@@ -183,12 +143,19 @@ class Interpreter:
             print(f"Error: invalid radius '{args[0]}'")
             return
         
-        color = args[1]
-        circle = Circle(radius, color)
-        var_name = self.state.add_object(circle)
-        print(f"Created circle: radius={radius}, color={color} -> {var_name}")
+        color = args[1].strip('"\'')
+        
+        # Create circle as JSON object
+        circle_obj = {
+            "type": "circle",
+            "radius": radius,
+            "color": color
+        }
+        
+        result_var = self.state.add_object(circle_obj, var_name)
+        print(f"Created circle: radius={radius}, color={color} -> {result_var}")
     
-    def execute_square(self, args):
+    def execute_square(self, args, var_name=None):
         """Execute square command: square SIZE COLOR"""
         if len(args) < 2:
             print(f"Error: square requires 2 arguments (size, color), got {len(args)}")
@@ -200,10 +167,54 @@ class Interpreter:
             print(f"Error: invalid size '{args[0]}'")
             return
         
-        color = args[1]
-        square = Square(size, color)
-        var_name = self.state.add_object(square)
-        print(f"Created square: size={size}, color={color} -> {var_name}")
+        color = args[1].strip('"\'')
+        
+        # Create square as JSON object
+        square_obj = {
+            "type": "square",
+            "size": size,
+            "color": color
+        }
+        
+        result_var = self.state.add_object(square_obj, var_name)
+        print(f"Created square: size={size}, color={color} -> {result_var}")
+    
+    def execute_scale(self, args):
+        """Execute scale command: scale VARNAME FACTOR"""
+        if len(args) < 2:
+            print(f"Error: scale requires 2 arguments (varname, factor), got {len(args)}")
+            return
+        
+        var_name = args[0]
+        try:
+            factor = float(args[1])
+        except ValueError:
+            print(f"Error: invalid scale factor '{args[1]}'")
+            return
+        
+        # Get the object
+        if var_name not in self.state.variables:
+            print(f"Error: variable '{var_name}' not found")
+            return
+        
+        obj_index = self.state.variables[var_name]
+        obj = self.state.objects[obj_index]
+        
+        # Scale based on object type
+        updates = {}
+        if obj["type"] == "circle":
+            new_radius = obj["radius"] * factor
+            updates["radius"] = new_radius
+            print(f"Scaling {var_name}: radius {obj['radius']} -> {new_radius}")
+        elif obj["type"] == "square":
+            new_size = obj["size"] * factor
+            updates["size"] = new_size
+            print(f"Scaling {var_name}: size {obj['size']} -> {new_size}")
+        else:
+            print(f"Error: cannot scale object type '{obj['type']}'")
+            return
+        
+        self.state.update_object(var_name, updates)
 
 
 def parse_script(script_path):
@@ -213,7 +224,7 @@ def parse_script(script_path):
     Returns:
         (plain_text, events, script_words)
         - plain_text: Script with events removed
-        - events: List of (position_in_plain_text, event_content)
+        - events: List of (word_index, event_content) where word_index is position in script_words
         - script_words: List of words from script
     """
     with open(script_path, 'r', encoding='utf-8') as f:
@@ -235,7 +246,12 @@ def parse_script(script_path):
         # Position in plain text (accounting for previous removals)
         position_in_plain = event_start_in_original - offset
         
-        events.append((position_in_plain, event_content))
+        # Calculate word index by counting words before this position
+        text_before_event = plain_text[:position_in_plain]
+        words_before = re.findall(r'\b\w+\b', text_before_event.lower())
+        word_index = len(words_before)
+        
+        events.append((word_index, event_content))
         
         # Update offset for the next iteration
         offset += len(match.group(0))
@@ -247,6 +263,84 @@ def parse_script(script_path):
     script_words = re.findall(r'\b\w+\b', plain_text.lower())
     
     return plain_text, events, script_words
+
+
+class WebSocketClient:
+    """Simple WebSocket client for sending graphics commands."""
+    
+    def __init__(self, url):
+        self.url = url
+        self.ws = None
+        self.connected = False
+        self.message_queue = queue.Queue()
+        self.thread = None
+        
+        if websocket is None:
+            print("Warning: websocket-client not installed. Graphics will not be sent to server.")
+            print("Install with: pip install websocket-client")
+            return
+        
+        # Start connection in separate thread
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+    
+    def _run(self):
+        """Run WebSocket connection in thread."""
+        if websocket is None:
+            return
+            
+        try:
+            self.ws = websocket.WebSocketApp(
+                self.url,
+                on_open=self._on_open,
+                on_error=self._on_error,
+                on_close=self._on_close
+            )
+            
+            # Run in thread
+            self.ws.run_forever()
+        except Exception as e:
+            print(f"WebSocket error: {e}")
+    
+    def _on_open(self, ws):
+        """Called when WebSocket connection opens."""
+        self.connected = True
+        print("Connected to graphics server")
+        
+        # Start message sender thread
+        threading.Thread(target=self._send_messages, daemon=True).start()
+    
+    def _on_error(self, ws, error):
+        """Called on WebSocket error."""
+        print(f"WebSocket error: {error}")
+    
+    def _on_close(self, ws, close_status_code, close_msg):
+        """Called when WebSocket connection closes."""
+        self.connected = False
+        print("Disconnected from graphics server")
+    
+    def _send_messages(self):
+        """Send queued messages to server."""
+        while self.connected:
+            try:
+                message = self.message_queue.get(timeout=0.1)
+                if self.ws and self.connected:
+                    self.ws.send(json.dumps(message))
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Error sending message: {e}")
+    
+    def send_command(self, command_dict):
+        """Queue a command to send to server."""
+        if websocket is None or not self.connected:
+            return
+        self.message_queue.put(command_dict)
+    
+    def close(self):
+        """Close WebSocket connection."""
+        if self.ws:
+            self.ws.close()
 
 
 class RealtimeInterpreter:
@@ -263,14 +357,17 @@ class RealtimeInterpreter:
             print(f"Script words: {' '.join(self.script_words[:20])}...")
             print(f"Events: {self.events}")
         
-        # Initialize state and interpreter
-        self.state = State(screen_width=800, screen_height=600)
-        self.interpreter = Interpreter(self.state)
-        
         # Tracking
         self.recognized_words = []  # All recognized words so far
         self.current_position = 0  # Current position in script_words
         self.executed_events = set()  # Indices of executed events
+        
+        # Initialize WebSocket client
+        self.ws_client = WebSocketClient(GRAPHICS_SERVER_URL)
+        
+        # Initialize state and interpreter
+        self.state = State(ws_client=self.ws_client)
+        self.interpreter = Interpreter(self.state)
         
         # Initialize Vosk
         self.model = vosk.Model(model_path)
@@ -281,10 +378,10 @@ class RealtimeInterpreter:
         self.audio = pyaudio.PyAudio()
         self.stream = None
         
-        # Initialize Pygame
+        # Initialize Pygame (small window for status display)
         pygame.init()
-        self.screen = pygame.display.set_mode((800, 600))
-        pygame.display.set_caption("Real-time Script Interpreter")
+        self.screen = pygame.display.set_mode((800, 200))
+        pygame.display.set_caption("Real-time Script Interpreter - Status")
         self.font = pygame.font.Font(None, 24)
         self.small_font = pygame.font.Font(None, 18)
         self.clock = pygame.time.Clock()
@@ -327,16 +424,15 @@ class RealtimeInterpreter:
         return best_position
     
     def check_and_execute_events(self, position):
-        """Check if we've passed any events and execute them."""
-        # Calculate character position in plain text from word position
-        char_position = 0
-        for i in range(min(position, len(self.script_words))):
-            char_position += len(self.script_words[i]) + 1  # +1 for space
+        """Check if we've passed any events and execute them.
         
+        Args:
+            position: Current word index in the script
+        """
         # Check each event
-        for idx, (event_pos, event_content) in enumerate(self.events):
-            if idx not in self.executed_events and char_position >= event_pos:
-                print(f"\n>>> Executing event: [{event_content}]")
+        for idx, (event_word_index, event_content) in enumerate(self.events):
+            if idx not in self.executed_events and position >= event_word_index:
+                print(f"\n>>> Executing event at word {event_word_index}: [{event_content}]")
                 self.interpreter.execute_instruction(event_content)
                 self.executed_events.add(idx)
     
@@ -369,69 +465,57 @@ class RealtimeInterpreter:
             # Could display this for visual feedback
     
     def draw_ui(self):
-        """Draw the UI showing script, recognized text, and graphics."""
-        self.screen.fill((0, 0, 0))  # Black background
+        """Draw status window (graphics are rendered in browser)."""
+        # Black background
+        self.screen.fill((0, 0, 0))
         
-        # Draw script text with position highlighting
+        # Show position indicator
         y = 20
-        script_display = ' '.join(self.script_words)
-        words_so_far = ' '.join(self.script_words[:self.current_position])
+        position_text = f"Position: {self.current_position}/{len(self.script_words)}"
+        text_surface = self.font.render(position_text, True, (200, 200, 200))
+        self.screen.blit(text_surface, (10, y))
         
-        # Draw completed words in gray
-        if words_so_far:
-            text_surface = self.small_font.render(words_so_far.upper(), True, (128, 128, 128))
-            self.screen.blit(text_surface, (20, y))
-            y += 25
+        # Show recent recognized words
+        y += 40
+        recent = ' '.join(self.recognized_words[-5:])
+        heard_text = f"Heard: {recent}"
+        text_surface = self.small_font.render(heard_text, True, (100, 200, 100))
+        self.screen.blit(text_surface, (10, y))
         
-        # Draw remaining words in white
-        remaining_words = ' '.join(self.script_words[self.current_position:self.current_position + 20])
-        if remaining_words:
-            text_surface = self.small_font.render(remaining_words.upper(), True, (255, 255, 255))
-            self.screen.blit(text_surface, (20, y))
-        
-        # Draw position indicator
-        y = 80
-        position_text = f"Position: {self.current_position}/{len(self.script_words)} words"
-        text_surface = self.small_font.render(position_text, True, (200, 200, 200))
-        self.screen.blit(text_surface, (20, y))
-        
-        # Draw recognized words (last 10)
-        y = 110
-        recent = ' '.join(self.recognized_words[-10:])
-        recognized_text = f"Heard: {recent}"
-        text_surface = self.small_font.render(recognized_text, True, (100, 200, 100))
-        self.screen.blit(text_surface, (20, y))
-        
-        # Draw events status
-        y = 140
-        events_text = f"Events: {len(self.executed_events)}/{len(self.events)} executed"
+        # Show events status
+        y += 30
+        events_text = f"Events: {len(self.executed_events)}/{len(self.events)}"
         text_surface = self.small_font.render(events_text, True, (200, 200, 100))
-        self.screen.blit(text_surface, (20, y))
+        self.screen.blit(text_surface, (10, y))
         
-        # Draw separator line
-        pygame.draw.line(self.screen, (100, 100, 100), (0, 180), (800, 180), 2)
-        
-        # Draw graphics area (objects in state)
-        # Offset graphics display down
-        graphics_offset_y = 180
-        for obj in self.state.get_displayable_objects():
-            # Create a subsurface for graphics area
-            graphics_surface = self.screen.subsurface((0, graphics_offset_y, 800, 420))
-            # Draw with adjusted center
-            obj.draw(graphics_surface, 400, 210)  # Center of graphics area
+        # Show connection status
+        y += 30
+        conn_status = "Connected" if self.ws_client.connected else "Disconnected"
+        conn_color = (100, 255, 100) if self.ws_client.connected else (255, 100, 100)
+        conn_text = f"Graphics Server: {conn_status}"
+        text_surface = self.small_font.render(conn_text, True, conn_color)
+        self.screen.blit(text_surface, (10, y))
         
         pygame.display.flip()
     
     def run(self):
         """Main loop: listen, recognize, execute, display."""
         print("\n" + "="*60)
-        print("REAL-TIME INTERPRETER")
+        print("REAL-TIME INTERPRETER - BROWSER SOURCE MODE")
         print("="*60)
         print(f"Script: {self.script_path}")
         print(f"Words: {len(self.script_words)}")
         print(f"Events: {len(self.events)}")
-        print("\nPress 'R' to reset position")
-        print("Press 'Q' or ESC to quit")
+        print("\n*** GRAPHICS SERVER MUST BE RUNNING ***")
+        print("1. Start: python graphics_server.py")
+        print("2. In OBS: Add 'Browser' source")
+        print("3. URL: http://localhost:8000")
+        print("4. Width: 1920, Height: 1080")
+        print("\nThis window shows status only.")
+        print("Graphics appear in the browser/OBS.")
+        print("\nControls:")
+        print("  R - Reset position and clear graphics")
+        print("  Q or ESC - Quit")
         print("="*60)
         print("\nListening...")
         
@@ -461,7 +545,7 @@ class RealtimeInterpreter:
                             self.recognized_words = []
                             self.current_position = 0
                             self.executed_events = set()
-                            self.state.objects = []
+                            self.state.clear()  # Clear graphics via WebSocket
                 
                 # Process audio
                 self.process_audio()
@@ -477,6 +561,7 @@ class RealtimeInterpreter:
             self.stream.stop_stream()
             self.stream.close()
             self.audio.terminate()
+            self.ws_client.close()
             pygame.quit()
             print("\nStopped listening.")
 

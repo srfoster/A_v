@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Graphics Display</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: transparent;
+        }
+        canvas {
+            display: block;
+            background: transparent;
+        }
+        #debug {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: red;
+            font-family: monospace;
+            font-size: 14px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            display: block; /* Show debug info to troubleshoot OBS */
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="debug">Connecting...</div>
+    
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const debugEl = document.getElementById('debug');
+        
+        // Set canvas size (match OBS browser source dimensions)
+        canvas.width = 1920;
+        canvas.height = 1080;
+        
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        
+        // Graphics state
+        let objects = [];
+        let wsConnected = false;
+        
+        function debug(msg) {
+            console.log(msg);
+            debugEl.textContent = msg;
+        }
+        
+        debug('Starting... Canvas size: ' + canvas.width + 'x' + canvas.height);
+        
+        // Try WebSocket connection
+        let ws;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        
+        function connectWebSocket() {
+            try {
+                // Try both localhost and 127.0.0.1
+                const wsUrl = 'ws://127.0.0.1:8000/ws';
+                debug('Connecting to: ' + wsUrl);
+                
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    wsConnected = true;
+                    reconnectAttempts = 0;
+                    debug('Connected! Waiting for commands...');
+                    console.log('WebSocket connected successfully');
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        objects = data.objects || [];
+                        debug('Received ' + objects.length + ' objects');
+                        draw();
+                    } catch (e) {
+                        debug('Error parsing message: ' + e.message);
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    debug('WebSocket error');
+                    console.error('WebSocket error:', error);
+                };
+                
+                ws.onclose = () => {
+                    wsConnected = false;
+                    debug('Disconnected');
+                    console.log('WebSocket closed');
+                    
+                    // Try to reconnect
+                    if (reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        debug('Reconnecting... attempt ' + reconnectAttempts);
+                        setTimeout(connectWebSocket, 2000);
+                    }
+                };
+            } catch (e) {
+                debug('Error creating WebSocket: ' + e.message);
+            }
+        }
+        
+        // Start connection
+        connectWebSocket();
+        
+        function parseColor(colorStr) {
+            // Handle color names and hex
+            const colors = {
+                'red': '#FF0000',
+                'green': '#00FF00',
+                'blue': '#0000FF',
+                'yellow': '#FFFF00',
+                'cyan': '#00FFFF',
+                'magenta': '#FF00FF',
+                'white': '#FFFFFF',
+                'black': '#000000',
+                'orange': '#FFA500',
+                'purple': '#800080'
+            };
+            
+            const lower = colorStr.toLowerCase().replace(/['"]/g, '');
+            return colors[lower] || colorStr;
+        }
+        
+        function draw() {
+            // Clear canvas with transparency
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw all objects
+            objects.forEach((obj, idx) => {
+                if (obj.type === 'circle') {
+                    drawCircle(obj);
+                } else if (obj.type === 'square') {
+                    drawSquare(obj);
+                }
+            });
+        }
+        
+        function drawCircle(obj) {
+            const x = obj.x !== undefined ? obj.x : centerX;
+            const y = obj.y !== undefined ? obj.y : centerY;
+            const radius = obj.radius;
+            const color = parseColor(obj.color);
+            
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+        }
+        
+        function drawSquare(obj) {
+            const x = obj.x !== undefined ? obj.x : centerX;
+            const y = obj.y !== undefined ? obj.y : centerY;
+            const size = obj.size;
+            const color = parseColor(obj.color);
+            
+            ctx.fillStyle = color;
+            ctx.fillRect(x - size/2, y - size/2, size, size);
+        }
+        
+        // Initial draw
+        draw();
+        
+        // Redraw periodically
+        setInterval(draw, 100);
+        
+        // Test: draw a white dot in center after 1 second (to verify canvas works)
+        setTimeout(() => {
+            ctx.fillStyle = 'red';
+            ctx.fillRect(centerX - 5, centerY - 5, 10, 10);
+            debug('Test dot drawn at center');
+        }, 1000);
+    </script>
+</body>
+</html>

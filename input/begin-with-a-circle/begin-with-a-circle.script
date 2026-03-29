@@ -1,8 +1,5 @@
-Let's begin with a circle [circle 50 "blue"].  
+Let's begin with a circle [c1 = circle 50 "red"].  
 
-At first, your brain tricks you
-into thinking you're seeing just one thing.
+Actually, let's make it blue [c2 = circle 50 "blue"].
 
-But if we look closer... 
-
----
+Let's make the red one a bit bigger. [scale c1 1.5]
