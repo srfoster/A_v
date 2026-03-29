@@ -54,7 +54,28 @@ def parse_script(script_path):
     return plain_text, events, content
 
 
-def load_transcription(json_path):
+def load_transcription(transcription_path):
+    """
+    Load word-level timestamps from transcription file (JSON or .words.txt).
+    
+    Args:
+        transcription_path: Path to transcription file (.json or .words.txt)
+    
+    Returns:
+        List of (word, start_time, end_time) tuples
+    """
+    transcription_path = Path(transcription_path)
+    
+    # Check file extension to determine format
+    if transcription_path.suffix == '.txt' and '.words' in transcription_path.name:
+        # Load from .words.txt format
+        return load_words_txt(transcription_path)
+    else:
+        # Load from JSON format
+        return load_transcription_json(transcription_path)
+
+
+def load_transcription_json(json_path):
     """
     Load word-level timestamps from AWS Transcribe JSON.
     
@@ -62,7 +83,7 @@ def load_transcription(json_path):
         json_path: Path to transcription JSON file
     
     Returns:
-        List of (word, start_time, end_time) tuples
+        List of (word, start_time, end_time, comment) tuples
     """
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -75,7 +96,43 @@ def load_transcription(json_path):
             word = item['alternatives'][0]['content']
             start_time = float(item['start_time'])
             end_time = float(item['end_time'])
-            words.append((word, start_time, end_time))
+            words.append((word, start_time, end_time, None))
+    
+    return words
+
+
+def load_words_txt(words_path):
+    """
+    Load word-level timestamps from .words.txt file.
+    
+    Args:
+        words_path: Path to .words.txt file
+    
+    Returns:
+        List of (word, start_time, end_time, comment) tuples
+    """
+    words = []
+    with open(words_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Parse format: start_time\tend_time\tword  // original_word
+            parts = line.split('\t')
+            if len(parts) >= 3:
+                start_time = float(parts[0])
+                end_time = float(parts[1])
+                # Extract word and comment
+                word_and_comment = parts[2]
+                if '//' in word_and_comment:
+                    word_part, comment_part = word_and_comment.split('//', 1)
+                    word = word_part.strip()
+                    comment = comment_part.strip()
+                else:
+                    word = word_and_comment.strip()
+                    comment = None
+                words.append((word, start_time, end_time, comment))
     
     return words
 
@@ -87,7 +144,7 @@ def match_events_to_timestamps(script_text, events, words, original_content):
     Args:
         script_text: Plain text from script (events removed)
         events: List of (position, event_text) tuples (positions in original content)
-        words: List of (word, start_time, end_time) tuples from transcription
+        words: List of (word, start_time, end_time, comment) tuples from transcription
         original_content: Original script content with brackets
     
     Returns:
@@ -108,8 +165,8 @@ def match_events_to_timestamps(script_text, events, words, original_content):
     word_to_timestamp = {}
     
     script_idx = 0
-    for trans_word, start_time, end_time in words:
-        trans_word_lower = trans_word.lower()
+    for word, start_time, end_time, comment in words:
+        trans_word_lower = word.lower()
         
         # Find matching word in script
         if script_idx < len(script_words):
@@ -154,41 +211,68 @@ def match_events_to_timestamps(script_text, events, words, original_content):
     return timestamped_events
 
 
-def write_instructions(output_path, timestamped_events):
+def write_instructions(output_path, words, timestamped_events):
     """
-    Write timestamped events to .instructions file.
+    Write instructions file with words and events interleaved.
     
     Args:
         output_path: Path to output .instructions file
+        words: List of (word, start_time, end_time, comment) tuples
         timestamped_events: List of (timestamp, event_text) tuples
     """
+    # Build all lines first to determine column widths
+    lines = []
+    
+    # Convert words to output format
+    for word, start_time, end_time, comment in words:
+        start_str = f"{start_time:.3f}"
+        end_str = f"{end_time:.3f}"
+        word_str = word
+        if comment:
+            word_str = f"{word}  // {comment}"
+        lines.append((start_time, start_str, end_str, word_str, False))
+    
+    # Add events with * as end_time marker
+    for timestamp, event_text in timestamped_events:
+        start_str = f"{timestamp:.3f}"
+        lines.append((timestamp, start_str, "*", f"[{event_text}]", True))
+    
+    # Sort by timestamp, keeping insertion order for ties
+    lines.sort(key=lambda x: x[0])
+    
+    # Calculate column widths
+    col1_width = max(len(line[1]) for line in lines)
+    col2_width = max(len(line[2]) for line in lines)
+    
+    # Write to file with aligned columns
     with open(output_path, 'w', encoding='utf-8') as f:
-        for timestamp, event_text in timestamped_events:
-            f.write(f"{timestamp:.3f}\t{event_text}\n")
+        for _, start_str, end_str, content, is_event in lines:
+            line = f"{start_str:<{col1_width}}\t{end_str:<{col2_width}}\t{content}"
+            f.write(line + '\n')
     
     print(f"Instructions written to: {output_path}")
 
 
-def compile_script(script_path, json_path, output_path=None):
+def compile_script(script_path, transcription_path, output_path=None):
     """
     Compile a .script file into timestamped .instructions file.
     
     Args:
         script_path: Path to .script file
-        json_path: Path to transcription JSON file
+        transcription_path: Path to transcription file (.json or .words.txt)
         output_path: Optional output path (default: same as script with .instructions extension)
     
     Returns:
         Path to output file
     """
     script_path = Path(script_path)
-    json_path = Path(json_path)
+    transcription_path = Path(transcription_path)
     
     if not script_path.exists():
         raise FileNotFoundError(f"Script file not found: {script_path}")
     
-    if not json_path.exists():
-        raise FileNotFoundError(f"JSON file not found: {json_path}")
+    if not transcription_path.exists():
+        raise FileNotFoundError(f"Transcription file not found: {transcription_path}")
     
     print(f"Parsing script: {script_path}")
     plain_text, events, original_content = parse_script(script_path)
@@ -197,8 +281,8 @@ def compile_script(script_path, json_path, output_path=None):
     for pos, event in events:
         print(f"  [{event}] at position {pos}")
     
-    print(f"\nLoading transcription: {json_path}")
-    words = load_transcription(json_path)
+    print(f"\nLoading transcription: {transcription_path}")
+    words = load_transcription(transcription_path)
     print(f"Loaded {len(words)} words with timestamps")
     
     print("\nMatching events to timestamps...")
@@ -215,7 +299,7 @@ def compile_script(script_path, json_path, output_path=None):
         output_path = Path(output_path)
     
     print(f"\nWriting output...")
-    write_instructions(output_path, timestamped_events)
+    write_instructions(output_path, words, timestamped_events)
     
     return output_path
 
@@ -229,8 +313,8 @@ def main():
         help='Path to .script file'
     )
     parser.add_argument(
-        'json_file',
-        help='Path to transcription JSON file (from AWS Transcribe)'
+        'transcription_file',
+        help='Path to transcription file (.json from AWS Transcribe or .words.txt)'
     )
     parser.add_argument(
         '-o', '--output',
@@ -240,7 +324,7 @@ def main():
     args = parser.parse_args()
     
     try:
-        compile_script(args.script_file, args.json_file, args.output)
+        compile_script(args.script_file, args.transcription_file, args.output)
     except Exception as e:
         print(f"Error: {e}")
         import sys

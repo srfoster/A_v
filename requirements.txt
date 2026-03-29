@@ -1,1 +1,5 @@
 boto3>=1.26.0
+pygame>=2.0.0
+opencv-python>=4.5.0
+vosk>=0.3.45
+pyaudio>=0.2.11
