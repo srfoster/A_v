@@ -3,6 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <title>Browser Interpreter</title>
+    <!-- Paper.js for vector graphics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paper.js/0.12.17/paper-full.min.js"></script>
+    <!-- Anime.js for animations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
     <style>
         body {
             margin: 0;
@@ -24,6 +28,7 @@
             background: rgba(0,0,0,0.7);
             padding: 10px;
             display: block;
+            z-index: 1000;
         }
     </style>
 </head>
@@ -32,20 +37,7 @@
     <div id="debug">Connecting...</div>
     
     <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
         const debugEl = document.getElementById('debug');
-        
-        // Canvas setup
-        canvas.width = 1920;
-        canvas.height = 1080;
-        
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height / 2;
-        
-        // State
-        let objects = [];
-        let variables = {};  // Store references to objects
         let wsConnected = false;
         
         function debug(msg) {
@@ -56,58 +48,21 @@
         debug('Browser Interpreter starting...');
         
         // ============================================
+        // PAPER.JS SETUP
+        // ============================================
+        
+        // Setup Paper.js
+        const canvas = document.getElementById('canvas');
+        canvas.width = 1920;
+        canvas.height = 1080;
+        paper.setup(canvas);
+        
+        // Convenient aliases
+        const { view, Path, Point, Size } = paper;
+        const center = view.center;
+        
+        // ============================================
         // INTERPRETER FUNCTIONS (called by eval)
-        // ============================================
-        
-        function circle(radius, color, x = centerX, y = centerY) {
-            const obj = {
-                type: 'circle',
-                radius: radius,
-                color: color,
-                x: x,
-                y: y
-            };
-            objects.push(obj);
-            render();
-            return obj;  // Return reference for variable assignment
-        }
-        
-        function square(size, color, x = centerX, y = centerY) {
-            const obj = {
-                type: 'square',
-                size: size,
-                color: color,
-                x: x,
-                y: y
-            };
-            objects.push(obj);
-            render();
-            return obj;
-        }
-        
-        function scale(obj, factor) {
-            if (obj.type === 'circle') {
-                obj.radius *= factor;
-            } else if (obj.type === 'square') {
-                obj.size *= factor;
-            }
-            render();
-        }
-        
-        function move(obj, x, y) {
-            obj.x = x;
-            obj.y = y;
-            render();
-        }
-        
-        function clear() {
-            objects = [];
-            variables = {};
-            render();
-        }
-        
-        // ============================================
-        // RENDERING
         // ============================================
         
         function parseColor(colorStr) {
@@ -121,32 +76,166 @@
                 'white': '#FFFFFF',
                 'black': '#000000',
                 'orange': '#FFA500',
-                'purple': '#800080'
+                'purple': '#800080',
+                'pink': '#FFC0CB',
+                'brown': '#8B4513'
             };
             
             const lower = String(colorStr).toLowerCase().replace(/['"]/g, '');
             return colors[lower] || colorStr;
         }
         
-        function render() {
-            // Clear canvas
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        function circle(radius, color, x = center.x, y = center.y) {
+            const path = new Path.Circle({
+                center: [x, y],
+                radius: radius,
+                fillColor: parseColor(color)
+            });
+            console.log('Created circle:', path);
+            return path;
+        }
+        
+        function square(size, color, x = center.x, y = center.y) {
+            const path = new Path.Rectangle({
+                center: [x, y],
+                size: [size, size],
+                fillColor: parseColor(color)
+            });
+            console.log('Created square:', path);
+            return path;
+        }
+        
+        function rect(width, height, color, x = center.x, y = center.y) {
+            const path = new Path.Rectangle({
+                center: [x, y],
+                size: [width, height],
+                fillColor: parseColor(color)
+            });
+            return path;
+        }
+        
+        function ellipse(width, height, color, x = center.x, y = center.y) {
+            const path = new Path.Ellipse({
+                center: [x, y],
+                size: [width, height],
+                fillColor: parseColor(color)
+            });
+            return path;
+        }
+        
+        // Scale with animation (using Anime.js)
+        function scale(obj, factor, duration = 1) {
+            if (!obj) {
+                console.error('scale: invalid object', obj);
+                return;
+            }
             
-            // Draw all objects
-            objects.forEach((obj, idx) => {
-                if (obj.type === 'circle') {
-                    ctx.beginPath();
-                    ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI * 2);
-                    ctx.fillStyle = parseColor(obj.color);
-                    ctx.fill();
-                } else if (obj.type === 'square') {
-                    ctx.fillStyle = parseColor(obj.color);
-                    ctx.fillRect(obj.x - obj.size/2, obj.y - obj.size/2, obj.size, obj.size);
+            const center = obj.position.clone();
+            const targetSize = obj.bounds.size.multiply(factor);
+            
+            anime({
+                targets: obj.bounds.size,
+                width: targetSize.width,
+                height: targetSize.height,
+                duration: duration * 1000,
+                easing: 'easeOutCubic',
+                update: () => {
+                    obj.position = center;
+                    view.update();
                 }
             });
-            
-            console.log('Rendered ' + objects.length + ' objects');
         }
+        
+        // Move with animation
+        function move(obj, x, y, duration = 0) {
+            if (!obj || !obj.position) {
+                console.error('move: invalid object', obj);
+                return;
+            }
+            
+            if (duration > 0) {
+                anime({
+                    targets: obj.position,
+                    x: x,
+                    y: y,
+                    duration: duration * 1000,
+                    easing: 'easeOutCubic',
+                    update: () => view.update()
+                });
+            } else {
+                obj.position.x = x;
+                obj.position.y = y;
+            }
+        }
+        
+        // Rotate (degrees)
+        function rotate(obj, degrees, duration = 0) {
+            if (!obj) return;
+            
+            if (duration > 0) {
+                const targetRotation = obj.rotation + degrees;
+                anime({
+                    targets: obj,
+                    rotation: targetRotation,
+                    duration: duration * 1000,
+                    easing: 'easeOutCubic',
+                    update: () => view.update()
+                });
+            } else {
+                obj.rotation += degrees;
+            }
+        }
+        
+        // Fade opacity
+        function fade(obj, targetOpacity, duration = 1) {
+            if (!obj) return;
+            
+            anime({
+                targets: obj,
+                opacity: targetOpacity,
+                duration: duration * 1000,
+                easing: 'easeOutCubic',
+                update: () => view.update()
+            });
+        }
+        
+        // Remove object
+        function remove(obj) {
+            if (obj && obj.remove) {
+                obj.remove();
+            }
+        }
+        
+        // Clear all
+        function clear() {
+            paper.project.activeLayer.removeChildren();
+            console.log('Cleared all objects');
+        }
+        
+        // ============================================
+        // MAKE FUNCTIONS GLOBALLY ACCESSIBLE
+        // ============================================
+        
+        // Expose functions to global scope for eval()
+        window.anime = anime;
+        window.circle = circle;
+        window.square = square;
+        window.rect = rect;
+        window.ellipse = ellipse;
+        window.scale = scale;
+        window.move = move;
+        window.rotate = rotate;
+        window.fade = fade;
+        window.remove = remove;
+        window.clear = clear;
+        
+        // Also expose Paper.js objects for direct manipulation
+        window.paper = paper;
+        window.Path = Path;
+        window.Point = Point;
+        window.Size = Size;
+        window.view = view;
+        window.center = center;
         
         // ============================================
         // WEBSOCKET CONNECTION
@@ -221,8 +310,8 @@
         // Start connection
         connectWebSocket();
         
-        // Initial render
-        render();
+        console.log('Paper.js initialized, view size:', view.size);
+        debug('Ready');
         
     </script>
 </body>
