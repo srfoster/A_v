@@ -1,5 +1,9 @@
+[let script = _debug_script_state()]
+
 Let's begin with a circle [let c1 = circle(50,"red")].  
 
 Let's make it a bit bigger. [scale(c1, 1.5, 2)]
 
 Let's add a blue one [let c2 = circle(50,"blue")]
+
+From the top [RESET()]

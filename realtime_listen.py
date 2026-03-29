@@ -88,6 +88,18 @@ class WebSocketClient:
             "code": command_str
         })
     
+    def send_position(self, position, total_words, words, plain_text):
+        """Send current position in script to interpreter."""
+        if websocket is None or not self.connected:
+            return
+        self.message_queue.put({
+            "command": "update_position",
+            "position": position,
+            "totalWords": total_words,
+            "words": words,
+            "plainText": plain_text
+        })
+    
     def close(self):
         if self.ws:
             self.ws.close()
@@ -106,31 +118,37 @@ def parse_script(script_path):
     with open(script_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    # Find all bracketed commands
-    commands = []
+    # Find all bracketed commands with their positions
     command_pattern = r'\[([^\]]+)\]'
+    matches = list(re.finditer(command_pattern, content))
     
-    plain_text = content
-    offset = 0
+    # Build plain text by removing commands
+    plain_text = re.sub(command_pattern, '', content)
     
-    for match in re.finditer(command_pattern, content):
+    # Extract words from plain text
+    script_words = re.findall(r'\b\w+\b', plain_text.lower())
+    
+    # Calculate word index for each command
+    commands = []
+    for match in matches:
         command_content = match.group(1)
-        command_start = match.start()
+        command_pos = match.start()
         
-        # Calculate word index
-        position_in_plain = command_start - offset
-        text_before_command = plain_text[:position_in_plain]
-        words_before = re.findall(r'\b\w+\b', text_before_command.lower())
+        # Count how many characters of plain text come before this command
+        # We need to subtract the length of all previous commands
+        plain_pos = command_pos
+        for prev_match in matches:
+            if prev_match.start() < command_pos:
+                plain_pos -= len(prev_match.group(0))
+            else:
+                break
+        
+        # Count words before this position in the plain text
+        text_before = plain_text[:plain_pos]
+        words_before = re.findall(r'\b\w+\b', text_before.lower())
         word_index = len(words_before)
         
         commands.append((word_index, command_content))
-        offset += len(match.group(0))
-    
-    # Remove commands from text
-    plain_text = re.sub(command_pattern, '', content)
-    
-    # Extract words
-    script_words = re.findall(r'\b\w+\b', plain_text.lower())
     
     return plain_text, commands, script_words
 
@@ -198,9 +216,15 @@ class RealtimeListener:
         """Check if we've reached any commands and execute them."""
         for idx, (command_word_index, command_content) in enumerate(self.commands):
             if idx not in self.executed_commands and position >= command_word_index:
-                print(f"\n>>> Executing command at word {command_word_index}: [{command_content}]")
-                self.ws_client.send_command(command_content)
-                self.executed_commands.add(idx)
+                # Check for meta-command RESET()
+                if command_content.strip().upper() == "RESET()":
+                    print(f"\n>>> Meta-command RESET() triggered at word {command_word_index}")
+                    self.executed_commands.add(idx)
+                    self.reset()
+                else:
+                    print(f"\n>>> Executing command at word {command_word_index}: [{command_content}]")
+                    self.ws_client.send_command(command_content)
+                    self.executed_commands.add(idx)
     
     def process_audio(self):
         """Process audio from microphone."""
@@ -223,6 +247,13 @@ class RealtimeListener:
                 if new_position > self.current_position:
                     self.current_position = new_position
                     self.check_and_execute_commands(self.current_position)
+                    # Send position update to interpreter
+                    self.ws_client.send_position(
+                        self.current_position,
+                        len(self.script_words),
+                        self.script_words,
+                        self.plain_text
+                    )
     
     def draw_ui(self):
         """Draw status window."""
@@ -265,6 +296,15 @@ class RealtimeListener:
         self.executed_commands = set()
         self.recognizer = vosk.KaldiRecognizer(self.model, 16000)
         self.recognizer.SetWords(True)
+        
+        # Reset browser - clear graphics and reset position
+        self.ws_client.send_command("clear()")
+        self.ws_client.send_position(
+            self.current_position,
+            len(self.script_words),
+            self.script_words,
+            self.plain_text
+        )
     
     def run(self):
         """Main loop."""
@@ -288,6 +328,14 @@ class RealtimeListener:
         print("  Q - Quit")
         print("="*60)
         print("\nListening...")
+        
+        # Send initial position to interpreter
+        self.ws_client.send_position(
+            self.current_position,
+            len(self.script_words),
+            self.script_words,
+            self.plain_text
+        )
         
         running = True
         clock = pygame.time.Clock()
