@@ -1,4 +1,6 @@
-boto3>=1.26.0
+openai-whisper>=20230314
+paddlepaddle-gpu==2.6.2
+paddleocr>=2.7.0
 pygame>=2.0.0
 opencv-python>=4.5.0
 vosk>=0.3.45

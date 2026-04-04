@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-AWS Transcription Script
-Transcribes audio from audio or video files using AWS Transcribe.
+Whisper Transcription Script
+Transcribes audio from audio or video files using OpenAI Whisper (local).
 Automatically extracts audio from video files using ffmpeg.
 """
 
@@ -14,12 +14,11 @@ import json
 import re
 from pathlib import Path
 from datetime import datetime
-import boto3
-from botocore.exceptions import ClientError
+import whisper
 
-# AWS Configuration
-DEFAULT_REGION = 'us-west-2'
-DEFAULT_BUCKET = 'av-transcriptions-west'
+# Whisper Configuration
+DEFAULT_MODEL = 'base'  # Options: tiny, base, small, medium, large
+AVAILABLE_MODELS = ['tiny', 'base', 'small', 'medium', 'large']
 
 # Video file extensions that require audio extraction
 VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.webm', '.m4v'}
@@ -40,17 +39,18 @@ def extract_audio_from_video(video_path, output_path=None):
     """
     if output_path is None:
         video_name = Path(video_path).stem
-        output_path = f"temp_audio_{video_name}_{int(time.time())}.mp3"
+        output_path = f"temp_audio_{video_name}_{int(time.time())}.wav"
     
     print(f"Extracting audio from {video_path}...")
     
-    # Use ffmpeg to extract audio
+    # Use ffmpeg to extract audio as WAV (Whisper prefers 16kHz mono WAV)
     cmd = [
         'ffmpeg',
         '-i', video_path,
         '-vn',  # No video
-        '-acodec', 'libmp3lame',  # Use MP3 codec
-        '-q:a', '2',  # High quality
+        '-acodec', 'pcm_s16le',  # PCM 16-bit
+        '-ar', '16000',  # 16kHz sample rate
+        '-ac', '1',  # Mono
         '-y',  # Overwrite output file
         output_path
     ]
@@ -75,248 +75,114 @@ def extract_audio_from_video(video_path, output_path=None):
         sys.exit(1)
 
 
-def upload_to_s3(file_path, bucket_name, s3_key=None, region=DEFAULT_REGION):
+def transcribe_audio_with_whisper(audio_path, model_name='base', language=None):
     """
-    Upload file to S3 bucket.
+    Transcribe audio file using Whisper.
     
     Args:
-        file_path: Local file path
-        bucket_name: S3 bucket name
-        s3_key: Optional S3 key (default: filename with timestamp)
-        region: AWS region
+        audio_path: Path to audio file
+        model_name: Whisper model size (tiny, base, small, medium, large)
+        language: Optional language code (e.g., 'en', 'es') for faster processing
     
     Returns:
-        S3 URI of uploaded file
+        Whisper result dictionary with text and word-level timestamps
     """
-    s3_client = boto3.client('s3', region_name=region)
+    print(f"Loading Whisper model: {model_name}...")
+    model = whisper.load_model(model_name)
     
-    if s3_key is None:
-        filename = Path(file_path).name
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        s3_key = f"transcribe-input/{timestamp}_{filename}"
+    print(f"Transcribing {audio_path}...")
     
-    print(f"Uploading {file_path} to s3://{bucket_name}/{s3_key}...")
+    # Transcribe with word-level timestamps
+    result = model.transcribe(
+        audio_path,
+        language=language,
+        word_timestamps=True,
+        verbose=True
+    )
     
-    try:
-        s3_client.upload_file(file_path, bucket_name, s3_key)
-        s3_uri = f"s3://{bucket_name}/{s3_key}"
-        print(f"Upload complete: {s3_uri}")
-        return s3_uri
-    except ClientError as e:
-        print(f"Error uploading to S3: {e}")
-        raise
+    print("Transcription completed!")
+    return result
 
 
-def start_transcription_job(job_name, s3_uri, language_code='en-US', output_bucket=None, region=DEFAULT_REGION):
-    """
-    Start AWS Transcribe job.
-    
-    Args:
-        job_name: Unique job name
-        s3_uri: S3 URI of media file
-        language_code: Language code (default: en-US)
-        output_bucket: Optional output bucket for results
-        region: AWS region
-    
-    Returns:
-        Job name
-    """
-    transcribe_client = boto3.client('transcribe', region_name=region)
-    
-    print(f"Starting transcription job: {job_name}")
-    
-    job_args = {
-        'TranscriptionJobName': job_name,
-        'Media': {'MediaFileUri': s3_uri},
-        'MediaFormat': Path(s3_uri).suffix.lstrip('.').lower(),
-        'LanguageCode': language_code
-    }
-    
-    if output_bucket:
-        job_args['OutputBucketName'] = output_bucket
-    
-    try:
-        transcribe_client.start_transcription_job(**job_args)
-        print(f"Transcription job started successfully")
-        return job_name
-    except ClientError as e:
-        print(f"Error starting transcription job: {e}")
-        raise
-
-
-def wait_for_transcription(job_name, poll_interval=5, region=DEFAULT_REGION):
-    """
-    Wait for transcription job to complete.
-    
-    Args:
-        job_name: Transcription job name
-        poll_interval: Seconds between status checks
-        region: AWS region
-    
-    Returns:
-        Job status response
-    """
-    transcribe_client = boto3.client('transcribe', region_name=region)
-    
-    print(f"Waiting for transcription to complete...")
-    
-    while True:
-        response = transcribe_client.get_transcription_job(
-            TranscriptionJobName=job_name
-        )
-        status = response['TranscriptionJob']['TranscriptionJobStatus']
-        
-        if status == 'COMPLETED':
-            print("Transcription completed!")
-            return response
-        elif status == 'FAILED':
-            failure_reason = response['TranscriptionJob'].get('FailureReason', 'Unknown')
-            print(f"Transcription failed: {failure_reason}")
-            raise Exception(f"Transcription failed: {failure_reason}")
-        else:
-            print(f"Status: {status}... waiting {poll_interval}s")
-            time.sleep(poll_interval)
-
-
-def download_transcript(transcript_uri, region=DEFAULT_REGION):
-    """
-    Download and parse transcript from URI.
-    
-    Args:
-        transcript_uri: URI of transcript JSON (S3 URL or S3 URI)
-        region: AWS region
-    
-    Returns:
-        Transcript dictionary
-    """
-    print(f"Downloading transcript from {transcript_uri}")
-    
-    # Parse S3 URL or URI to get bucket and key
-    if transcript_uri.startswith('s3://'):
-        # s3://bucket/key format
-        parts = transcript_uri[5:].split('/', 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ''
-    elif 's3' in transcript_uri and 'amazonaws.com' in transcript_uri:
-        # https://s3.region.amazonaws.com/bucket/key or https://bucket.s3.region.amazonaws.com/key
-        import re
-        # Try bucket.s3.region.amazonaws.com/key format
-        match = re.search(r'https://([^.]+)\.s3[^/]*amazonaws\.com/(.+)', transcript_uri)
-        if match:
-            bucket = match.group(1)
-            key = match.group(2)
-        else:
-            # Try s3.region.amazonaws.com/bucket/key format
-            match = re.search(r'https://s3[^/]*amazonaws\.com/([^/]+)/(.+)', transcript_uri)
-            if match:
-                bucket = match.group(1)
-                key = match.group(2)
-            else:
-                raise ValueError(f"Could not parse S3 URL: {transcript_uri}")
-    else:
-        raise ValueError(f"Unsupported transcript URI format: {transcript_uri}")
-    
-    # Download using boto3 S3 client (uses proper credentials)
-    s3_client = boto3.client('s3', region_name=region)
-    
-    try:
-        response = s3_client.get_object(Bucket=bucket, Key=key)
-        data = json.loads(response['Body'].read().decode())
-        return data
-    except ClientError as e:
-        print(f"Error downloading transcript from S3: {e}")
-        raise
-
-
-def save_transcript(transcript_data, output_path):
+def save_transcript(whisper_result, output_path, formats=['srt']):
     """
     Save transcript to file.
     
     Args:
-        transcript_data: Transcript dictionary
+        whisper_result: Whisper result dictionary
         output_path: Output file path (typically .json)
+        formats: List of formats to save (options: 'srt', 'txt', 'words', 'json')
+    
+    Returns:
+        Transcript text
     """
     base_path = Path(output_path).with_suffix('')
     
     # Extract the actual text
-    text = transcript_data['results']['transcripts'][0]['transcript']
+    text = whisper_result['text'].strip()
     
     # Save as plain text
-    txt_path = base_path.with_suffix('.txt')
-    with open(txt_path, 'w', encoding='utf-8') as f:
-        f.write(text)
-    
-    print(f"Transcript saved to: {txt_path}")
+    if 'txt' in formats:
+        txt_path = base_path.with_suffix('.txt')
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        print(f"Transcript saved to: {txt_path}")
     
     # Save word-level timestamps
-    if 'items' in transcript_data['results']:
+    if 'words' in formats:
         words_path = base_path.with_suffix('.words.txt')
         with open(words_path, 'w', encoding='utf-8') as f:
-            for item in transcript_data['results']['items']:
-                if item['type'] == 'pronunciation':
-                    word = item['alternatives'][0]['content']
-                    start = float(item.get('start_time', 0))
-                    end = float(item.get('end_time', 0))
-                    f.write(f"{start:.3f}\t{end:.3f}\t{word}\n")
-                elif item['type'] == 'punctuation':
-                    # Append punctuation to previous line if possible
-                    punct = item['alternatives'][0]['content']
-                    # Note: punctuation doesn't have timestamps
-        
+            for segment in whisper_result.get('segments', []):
+                for word_data in segment.get('words', []):
+                    word = word_data.get('word', '').strip()
+                    start = word_data.get('start', 0)
+                    end = word_data.get('end', 0)
+                    if word:
+                        f.write(f"{start:.3f}\t{end:.3f}\t{word}\n")
         print(f"Word timestamps saved to: {words_path}")
-        
-        # Also save in SRT subtitle format
+    
+    # Save in SRT subtitle format
+    if 'srt' in formats:
         srt_path = base_path.with_suffix('.srt')
         with open(srt_path, 'w', encoding='utf-8') as f:
             subtitle_num = 1
-            words = []
-            for item in transcript_data['results']['items']:
-                if item['type'] == 'pronunciation':
-                    words.append(item)
-            
-            # Group words into subtitle chunks (5-10 words each)
-            chunk_size = 8
-            for i in range(0, len(words), chunk_size):
-                chunk = words[i:i+chunk_size]
-                if not chunk:
-                    continue
+            for segment in whisper_result.get('segments', []):
+                start_time = segment.get('start', 0)
+                end_time = segment.get('end', 0)
+                segment_text = segment.get('text', '').strip()
+                
+                if segment_text:
+                    # Format times as SRT timestamps (HH:MM:SS,mmm)
+                    start_str = f"{int(start_time//3600):02d}:{int((start_time%3600)//60):02d}:{int(start_time%60):02d},{int((start_time%1)*1000):03d}"
+                    end_str = f"{int(end_time//3600):02d}:{int((end_time%3600)//60):02d}:{int(end_time%60):02d},{int((end_time%1)*1000):03d}"
                     
-                start_time = float(chunk[0].get('start_time', 0))
-                end_time = float(chunk[-1].get('end_time', 0))
-                text = ' '.join(w['alternatives'][0]['content'] for w in chunk)
-                
-                # Format times as SRT timestamps (HH:MM:SS,mmm)
-                start_str = f"{int(start_time//3600):02d}:{int((start_time%3600)//60):02d}:{int(start_time%60):02d},{int((start_time%1)*1000):03d}"
-                end_str = f"{int(end_time//3600):02d}:{int((end_time%3600)//60):02d}:{int(end_time%60):02d},{int((end_time%1)*1000):03d}"
-                
-                f.write(f"{subtitle_num}\n")
-                f.write(f"{start_str} --> {end_str}\n")
-                f.write(f"{text}\n\n")
-                subtitle_num += 1
-        
+                    f.write(f"{subtitle_num}\n")
+                    f.write(f"{start_str} --> {end_str}\n")
+                    f.write(f"{segment_text}\n\n")
+                    subtitle_num += 1
         print(f"SRT subtitles saved to: {srt_path}")
     
-    # Save full JSON
-    json_path = base_path.with_suffix('.json')
-    with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(transcript_data, f, indent=2)
-    
-    print(f"Full transcript data saved to: {json_path}")
+    # Save full JSON (Whisper format)
+    if 'json' in formats:
+        json_path = base_path.with_suffix('.json')
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(whisper_result, f, indent=2)
+        print(f"Full transcript data saved to: {json_path}")
     
     return text
 
 
-def transcribe_file(input_file, bucket_name=DEFAULT_BUCKET, language_code='en-US', output_dir=None, cleanup=True, region=DEFAULT_REGION):
+def transcribe_file(input_file, model_name=DEFAULT_MODEL, language=None, output_dir=None, cleanup=True, formats=['srt']):
     """
-    Main transcription workflow.
+    Main transcription workflow using Whisper.
     
     Args:
         input_file: Path to input audio/video file
-        bucket_name: S3 bucket name (default: av-transcriptions-west)
-        language_code: Language code (default: en-US)
-        output_dir: Output directory for transcript (default: same as input)
+        model_name: Whisper model size (tiny, base, small, medium, large)
+        language: Optional language code (e.g., 'en', 'es', 'fr')
+        output_dir: Output directory for transcript (default: directory named after input file)
         cleanup: Whether to clean up temporary files
-        region: AWS region (default: us-west-2)
+        formats: List of formats to save (options: 'srt', 'txt', 'words', 'json')
     
     Returns:
         Transcript text
@@ -341,32 +207,20 @@ def transcribe_file(input_file, bucket_name=DEFAULT_BUCKET, language_code='en-US
         audio_file = str(input_path)
     
     try:
-        # Generate unique job name
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        job_name = f"transcribe_{input_path.stem}_{timestamp}"
+        # Transcribe with Whisper
+        whisper_result = transcribe_audio_with_whisper(audio_file, model_name, language)
         
-        # Upload to S3
-        s3_uri = upload_to_s3(audio_file, bucket_name, region=region)
-        
-        # Start transcription
-        start_transcription_job(job_name, s3_uri, language_code, bucket_name, region=region)
-        
-        # Wait for completion
-        result = wait_for_transcription(job_name, region=region)
-        
-        # Download transcript
-        transcript_uri = result['TranscriptionJob']['Transcript']['TranscriptFileUri']
-        transcript_data = download_transcript(transcript_uri, region=region)
-        
-        # Save transcript
+        # Determine output directory
         if output_dir:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
         else:
-            output_dir = input_path.parent
+            # Create directory named after input file in the same directory
+            output_dir = input_path.parent / input_path.stem
+            output_dir.mkdir(parents=True, exist_ok=True)
         
-        output_path = output_dir / f"{input_path.stem}.json"
-        text = save_transcript(transcript_data, str(output_path))
+        output_path = output_dir / f"{input_path.stem}.srt"
+        text = save_transcript(whisper_result, str(output_path), formats)
         
         print(f"\n{'='*60}")
         print("TRANSCRIPT:")
@@ -385,47 +239,72 @@ def transcribe_file(input_file, bucket_name=DEFAULT_BUCKET, language_code='en-US
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Transcribe audio/video files using AWS Transcribe'
+        description='Transcribe audio/video files using OpenAI Whisper (local)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Available Whisper models (larger = better accuracy but slower):
+  tiny    - Fastest, least accurate (~1GB VRAM)
+  base    - Good balance (default) (~1GB VRAM)
+  small   - Better accuracy (~2GB VRAM)
+  medium  - High accuracy (~5GB VRAM)
+  large   - Best accuracy (~10GB VRAM)
+
+Examples:
+  # Transcribe a video file
+  python transcribe.py video.mp4
+  
+  # Use a larger model for better accuracy
+  python transcribe.py audio.mp3 -m medium
+  
+  # Specify language for faster processing
+  python transcribe.py audio.wav -l es
+  
+  # Custom output directory
+  python transcribe.py video.mp4 -o ./my_transcripts
+        """
     )
     parser.add_argument(
         'input_file',
         help='Path to input audio or video file'
     )
     parser.add_argument(
-        '-b', '--bucket',
-        default=DEFAULT_BUCKET,
-        help=f'S3 bucket name for storing media files (default: {DEFAULT_BUCKET})'
-    )
-    parser.add_argument(
-        '-r', '--region',
-        default=DEFAULT_REGION,
-        help=f'AWS region (default: {DEFAULT_REGION})'
+        '-m', '--model',
+        default=DEFAULT_MODEL,
+        choices=AVAILABLE_MODELS,
+        help=f'Whisper model size (default: {DEFAULT_MODEL})'
     )
     parser.add_argument(
         '-l', '--language',
-        default='en-US',
-        help='Language code (default: en-US)'
+        help='Language code (e.g., en, es, fr) for faster processing. Auto-detected if not specified.'
     )
     parser.add_argument(
         '-o', '--output-dir',
-        help='Output directory for transcript (default: same as input file)'
+        help='Output directory for transcript (default: directory named after input file)'
     )
     parser.add_argument(
         '--no-cleanup',
         action='store_true',
         help='Keep temporary audio files (for video inputs)'
     )
+    parser.add_argument(
+        '--all-formats',
+        action='store_true',
+        help='Generate all output formats (txt, words, srt, json). Default: only srt'
+    )
     
     args = parser.parse_args()
+    
+    # Determine which formats to generate
+    formats = ['srt', 'txt', 'words', 'json'] if args.all_formats else ['srt']
     
     try:
         transcribe_file(
             args.input_file,
-            args.bucket,
+            args.model,
             args.language,
             args.output_dir,
             cleanup=not args.no_cleanup,
-            region=args.region
+            formats=formats
         )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
