@@ -124,8 +124,7 @@ def process_folder(folder_path):
     # Get script directory
     script_dir = Path(__file__).parent.resolve()
     
-    # Pipeline order: transcripts -> thumbs -> ocr_extractions -> gifs -> summaries
-    processors = ['transcripts', 'thumbs', 'ocr_extractions', 'gifs', 'summaries']
+    processors = ['transcripts', 'thumbs', 'summaries', 'show_thumbs', 'show_transcripts', 'show_all'] 
     
     print(f"\nPipeline: {' -> '.join(processors)}")
     print()
