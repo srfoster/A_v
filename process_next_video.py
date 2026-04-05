@@ -206,48 +206,116 @@ def process_video(video_path, model='base', interval=10, skip_ocr=False):
             json_files = list(output_dir.glob('*.json'))
             
             f.write(f"{'='*60}\n")
-            f.write(f"Generated Files:\n")
+            f.write(f"Generated Files Summary:\n")
             f.write(f"{'='*60}\n")
             f.write(f"  Subtitle files (SRT): {len(srt_files)}\n")
             f.write(f"  Transcript files (TXT): {len(txt_files)}\n")
             f.write(f"  Thumbnail images (PNG): {len(png_files)}\n")
             f.write(f"  OCR data (JSON): {len(json_files)}\n")
             
-            # List actual files
+            # List SRT files with content preview
             if srt_files:
-                f.write(f"\n  SRT Files:\n")
+                f.write(f"\n{'='*60}\n")
+                f.write(f"Subtitle Files (SRT):\n")
+                f.write(f"{'='*60}\n")
                 for srt in sorted(srt_files):
-                    f.write(f"    - {srt.name}\n")
-            
-            if txt_files:
-                f.write(f"\n  TXT Files:\n")
-                for txt in sorted(txt_files):
-                    f.write(f"    - {txt.name}\n")
-            
-            # Read and include transcript preview
-            f.write(f"\n{'='*60}\n")
-            f.write(f"Transcription Preview:\n")
-            f.write(f"{'='*60}\n")
-            
-            transcript_found = False
-            for txt_file in txt_files:
-                if txt_file.exists():
+                    f.write(f"\n📄 {srt.name}\n")
+                    f.write(f"   Size: {srt.stat().st_size / 1024:.1f} KB\n")
                     try:
-                        content = txt_file.read_text(encoding='utf-8')
-                        preview = content[:500] if len(content) > 500 else content
-                        f.write(f"\nFrom {txt_file.name}:\n")
-                        f.write(f"{preview}\n")
-                        if len(content) > 500:
-                            f.write(f"... ({len(content) - 500} more characters)\n")
-                        f.write(f"\nTotal transcript length: {len(content)} characters\n")
-                        f.write(f"Word count: ~{len(content.split())} words\n")
-                        transcript_found = True
-                        break
+                        content = srt.read_text(encoding='utf-8')
+                        lines = content.split('\n')
+                        # Show first 15 lines of SRT (usually 3-5 subtitle entries)
+                        preview_lines = lines[:15]
+                        f.write(f"   Preview (first {min(15, len(lines))} lines):\n")
+                        f.write("   " + "-" * 55 + "\n")
+                        for line in preview_lines:
+                            f.write(f"   {line}\n")
+                        if len(lines) > 15:
+                            f.write(f"   ... ({len(lines) - 15} more lines)\n")
+                        f.write("   " + "-" * 55 + "\n")
                     except Exception as e:
-                        f.write(f"(Could not read transcript: {e})\n")
+                        f.write(f"   (Could not read file: {e})\n")
             
-            if not transcript_found:
-                f.write("(No transcript generated)\n")
+            # List TXT files with content preview
+            if txt_files:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"Transcript Files (TXT):\n")
+                f.write(f"{'='*60}\n")
+                for txt in sorted(txt_files):
+                    f.write(f"\n📄 {txt.name}\n")
+                    f.write(f"   Size: {txt.stat().st_size / 1024:.1f} KB\n")
+                    try:
+                        content = txt.read_text(encoding='utf-8')
+                        word_count = len(content.split())
+                        f.write(f"   Length: {len(content)} characters, ~{word_count} words\n")
+                        
+                        # Show first 300 characters
+                        preview = content[:300] if len(content) > 300 else content
+                        f.write(f"   Preview:\n")
+                        f.write("   " + "-" * 55 + "\n")
+                        for line in preview.split('\n')[:10]:  # Max 10 lines
+                            f.write(f"   {line}\n")
+                        if len(content) > 300:
+                            f.write(f"   ... ({len(content) - 300} more characters)\n")
+                        f.write("   " + "-" * 55 + "\n")
+                    except Exception as e:
+                        f.write(f"   (Could not read file: {e})\n")
+            
+            # List PNG thumbnail files with OCR text
+            if png_files:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"Thumbnail Images (PNG): {len(png_files)} files\n")
+                f.write(f"{'='*60}\n")
+                
+                # Show first 10 and last 5 thumbnails with their OCR text
+                sorted_pngs = sorted(png_files)
+                sample_pngs = sorted_pngs[:10] + (sorted_pngs[-5:] if len(sorted_pngs) > 15 else [])
+                sample_pngs = list(dict.fromkeys(sample_pngs))  # Remove duplicates while preserving order
+                
+                for png in sample_pngs[:15]:
+                    f.write(f"\n🖼️  {png.name}")
+                    f.write(f" ({png.stat().st_size / 1024:.1f} KB)\n")
+                    
+                    # Try to read corresponding OCR text file
+                    txt_file = png.with_suffix('.txt')
+                    if txt_file.exists():
+                        try:
+                            ocr_text = txt_file.read_text(encoding='utf-8').strip()
+                            if ocr_text:
+                                # Show first 200 chars of OCR text
+                                preview = ocr_text[:200] if len(ocr_text) > 200 else ocr_text
+                                f.write(f"   OCR Text: {preview}")
+                                if len(ocr_text) > 200:
+                                    f.write(f"...")
+                                f.write(f"\n")
+                            else:
+                                f.write(f"   OCR Text: (no text detected)\n")
+                        except Exception as e:
+                            f.write(f"   OCR Text: (could not read)\n")
+                    else:
+                        f.write(f"   OCR Text: (no OCR file)\n")
+                
+                if len(png_files) > 15:
+                    f.write(f"\n   ... and {len(png_files) - 15} more thumbnail files\n")
+            
+            # List JSON files with summary
+            if json_files:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"JSON Data Files:\n")
+                f.write(f"{'='*60}\n")
+                for json_file in sorted(json_files):
+                    f.write(f"\n📊 {json_file.name}\n")
+                    f.write(f"   Size: {json_file.stat().st_size / 1024:.1f} KB\n")
+                    try:
+                        with open(json_file, 'r', encoding='utf-8') as jf:
+                            data = json.load(jf)
+                        f.write(f"   Type: {type(data).__name__}\n")
+                        if isinstance(data, dict):
+                            f.write(f"   Keys: {len(data)} items\n")
+                        elif isinstance(data, list):
+                            f.write(f"   Items: {len(data)}\n")
+                    except Exception as e:
+                        f.write(f"   (Could not parse JSON: {e})\n")
             
             # Read and include OCR results
             f.write(f"\n{'='*60}\n")
