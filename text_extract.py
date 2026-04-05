@@ -10,29 +10,36 @@ import sys
 import argparse
 from pathlib import Path
 
-# Add NVIDIA CUDA library paths for Windows (Python 3.8+)
-# This ensures PaddlePaddle can find CUDNN and cuBLAS DLLs
+# Add NVIDIA CUDA and PyTorch library paths for Windows (Python 3.8+)
+# This ensures PaddlePaddle/PyTorch can find CUDNN, cuBLAS, and PyTorch DLLs
 if sys.platform == 'win32':
     import site
     site_packages = site.getsitepackages()[0]
-    cuda_paths = [
+    
+    #  Must add DLL directories BEFORE any imports that use them
+    dll_paths = [
+        # PyTorch DLLs - add this first
+        os.path.join(site_packages, 'torch', 'lib'),
+        # NVIDIA CUDA DLLs
         os.path.join(site_packages, 'nvidia', 'cudnn', 'bin'),
         os.path.join(site_packages, 'nvidia', 'cublas', 'bin'),
         os.path.join(site_packages, 'nvidia', 'cuda_nvrtc', 'bin'),
+        os.path.join(site_packages, 'nvidia', 'cuda_runtime', 'bin'),
     ]
     
-    # Add to PATH environment variable
-    for cuda_path in cuda_paths:
-        if os.path.exists(cuda_path):
-            if cuda_path not in os.environ.get('PATH', ''):
-                os.environ['PATH'] = cuda_path + os.pathsep + os.environ.get('PATH', '')
-            
-            # Also use add_dll_directory for Python 3.8+ on Windows
-            if hasattr(os, 'add_dll_directory'):
+    # CRITICAL: Use add_dll_directory FIRST (Python 3.8+)
+    if hasattr(os, 'add_dll_directory'):
+        for dll_path in dll_paths:
+            if os.path.exists(dll_path):
                 try:
-                    os.add_dll_directory(cuda_path)
-                except (FileNotFoundError, OSError):
+                    os.add_dll_directory(dll_path)
+                except (FileNotFoundError, OSError) as e:
                     pass
+    
+    # Also add to PATH as backup
+    for dll_path in dll_paths:
+        if os.path.exists(dll_path) and dll_path not in os.environ.get('PATH', ''):
+            os.environ['PATH'] = dll_path + os.pathsep + os.environ.get('PATH', '')
 
 from paddleocr import PaddleOCR
 

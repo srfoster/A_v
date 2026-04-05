@@ -289,13 +289,13 @@ Examples:
     parser.add_argument(
         '--all-formats',
         action='store_true',
-        help='Generate all output formats (txt, words, srt, json). Default: only srt'
+        help='Generate all output formats (txt, words, srt, json). Default: srt and txt'
     )
     
     args = parser.parse_args()
     
     # Determine which formats to generate
-    formats = ['srt', 'txt', 'words', 'json'] if args.all_formats else ['srt']
+    formats = ['srt', 'txt', 'words', 'json'] if args.all_formats else ['srt', 'txt']
     
     try:
         transcribe_file(
