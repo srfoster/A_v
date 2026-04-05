@@ -75,12 +75,6 @@ def generate_gif(video_path, output_path, duration=None, fps=10, width=480):
                 print("Failed to determine video duration")
                 return False
             
-            # Check if video has valid duration
-            if video_duration <= 0:
-                print(f"Invalid video duration: {video_duration:.1f}s")
-                print("The video file may be corrupted or empty")
-                return False
-            
             # Calculate 10% of video duration
             duration = max(1.0, video_duration * 0.1)  # Minimum 1 second
             print(f"Video duration: {video_duration:.1f}s")
@@ -103,12 +97,11 @@ def generate_gif(video_path, output_path, duration=None, fps=10, width=480):
             str(palette_path)
         ]
         
-        result = subprocess.run(
+        subprocess.run(
             palette_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=True,
-            text=True
+            check=True
         )
         
         # Generate GIF using palette
@@ -123,12 +116,11 @@ def generate_gif(video_path, output_path, duration=None, fps=10, width=480):
             str(output_path)
         ]
         
-        result = subprocess.run(
+        subprocess.run(
             gif_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=True,
-            text=True
+            check=True
         )
         
         # Clean up palette file
@@ -146,9 +138,6 @@ def generate_gif(video_path, output_path, duration=None, fps=10, width=480):
         
     except subprocess.CalledProcessError as e:
         print(f"Error creating GIF: {e}")
-        if e.stderr:
-            print(f"FFmpeg error output:")
-            print(e.stderr)
         return False
     except Exception as e:
         print(f"Unexpected error: {e}")

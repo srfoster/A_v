@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Folder OCR Extraction Processor
-Extracts text from all PNG images in a folder using Llama Vision Model.
+Extracts text from all PNG images in a folder using PaddleOCR.
 Calls the file processor on each .png file found.
 
 Usage:
@@ -83,14 +83,14 @@ def get_extraction_preview(ocr_file_path, max_length=80):
         return None
 
 
-def extract_ocr_with_processor(file_path, model='llama3.2-vision', timeout=60, logger=None):
+def extract_ocr_with_processor(file_path, use_gpu=True, lang='en', logger=None):
     """
     Call the file processor to extract OCR from a single file.
     
     Args:
         file_path: Path to the PNG file
-        model: Vision model to use
-        timeout: Timeout in seconds for processing
+        use_gpu: Whether to use GPU
+        lang: Language code
         logger: Logger instance
     
     Returns:
@@ -107,11 +107,11 @@ def extract_ocr_with_processor(file_path, model='llama3.2-vision', timeout=60, l
     # Build command
     cmd = [sys.executable, str(file_processor), str(file_path)]
     
-    if model:
-        cmd.extend(['-m', model])
+    if not use_gpu:
+        cmd.append('--cpu')
     
-    if timeout:
-        cmd.extend(['-t', str(timeout)])
+    if lang and lang != 'en':
+        cmd.extend(['-l', lang])
     
     print(f"\nProcessing: {file_path.name}")
     print(f"Command: {' '.join(cmd)}\n")
@@ -120,8 +120,8 @@ def extract_ocr_with_processor(file_path, model='llama3.2-vision', timeout=60, l
         result = subprocess.run(
             cmd,
             check=True,
-            text=True,
-            capture_output=True
+            text=True
+            # Don't capture output so we can see errors
         )
         
         # Determine OCR file path
@@ -147,14 +147,14 @@ def extract_ocr_with_processor(file_path, model='llama3.2-vision', timeout=60, l
         return False, None, None
 
 
-def extract_ocr_from_folder(folder_path, model='llama3.2-vision', timeout=60, continue_on_error=True):
+def extract_ocr_from_folder(folder_path, use_gpu=True, lang='en', continue_on_error=True):
     """
     Extract OCR text from all PNG files in a folder.
     
     Args:
         folder_path: Path to folder containing PNG files
-        model: Vision model to use
-        timeout: Timeout in seconds for each image
+        use_gpu: Whether to use GPU
+        lang: Language code
         continue_on_error: Whether to continue if a file fails
     
     Returns:
@@ -170,8 +170,8 @@ def extract_ocr_from_folder(folder_path, model='llama3.2-vision', timeout=60, co
     print(f"Folder: {folder}")
     print('='*60)
     
-    logger.info(f"Model: {model}")
-    logger.info(f"Timeout: {timeout}s per image")
+    logger.info(f"GPU: {'Enabled' if use_gpu else 'Disabled'}")
+    logger.info(f"Language: {lang}")
     
     # Find all PNG files
     png_files = find_png_files(folder)
@@ -190,7 +190,7 @@ def extract_ocr_from_folder(folder_path, model='llama3.2-vision', timeout=60, co
         print(f"  - {rel_path}")
         logger.info(f"  - {rel_path}")
     
-    print(f"\nExtracting OCR text with Llama Vision (model: {model})")
+    print(f"\nExtracting OCR text with PaddleOCR ({'GPU' if use_gpu else 'CPU'})")
     
     # Process each file
     results = {
@@ -210,8 +210,8 @@ def extract_ocr_from_folder(folder_path, model='llama3.2-vision', timeout=60, co
         
         success, ocr_path, preview = extract_ocr_with_processor(
             png_file,
-            model,
-            timeout,
+            use_gpu,
+            lang,
             logger
         )
         
@@ -268,13 +268,13 @@ def extract_ocr_from_folder(folder_path, model='llama3.2-vision', timeout=60, co
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Extract OCR text from all PNG files in a folder using Llama Vision Model',
+        description='Extract OCR text from all PNG files in a folder using PaddleOCR',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python ocr_extractions.py /path/to/images/
-  python ocr_extractions.py ./thumbs/ -m llava
-  python ocr_extractions.py ./images/ --continue
+  python ocr_extractions.py ./thumbs/ --cpu
+  python ocr_extractions.py ./images/ --continue -l ch
         """
     )
     parser.add_argument(
@@ -282,15 +282,14 @@ Examples:
         help='Path to folder containing PNG files'
     )
     parser.add_argument(
-        '-m', '--model',
-        default='llama3.2-vision',
-        help='Vision model to use (default: llama3.2-vision)'
+        '--cpu',
+        action='store_true',
+        help='Use CPU instead of GPU'
     )
     parser.add_argument(
-        '-t', '--timeout',
-        type=int,
-        default=60,
-        help='Timeout in seconds for each image (default: 60)'
+        '-l', '--lang',
+        default='en',
+        help='Language code (default: en)'
     )
     parser.add_argument(
         '--continue',
@@ -301,25 +300,20 @@ Examples:
     
     args = parser.parse_args()
     
-    # Check Ollama
+    # Check PaddleOCR
     try:
-        import ollama
-        ollama.list()
+        import paddleocr
     except ImportError:
-        print("ERROR: ollama package not installed!")
+        print("ERROR: paddleocr package not installed!")
         print("\nPlease install with:")
-        print("  pip install ollama")
-        sys.exit(1)
-    except Exception as e:
-        print(f"ERROR: Cannot connect to Ollama: {e}")
-        print("\nMake sure Ollama is running.")
+        print("  pip install paddleocr")
         sys.exit(1)
     
     try:
         results = extract_ocr_from_folder(
             args.folder,
-            args.model,
-            args.timeout,
+            use_gpu=not args.cpu,
+            lang=args.lang,
             continue_on_error=args.continue_on_error
         )
         

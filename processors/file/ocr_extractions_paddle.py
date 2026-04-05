@@ -44,9 +44,13 @@ def extract_text_from_image(image_path, use_gpu=True, lang='en'):
     try:
         from paddleocr import PaddleOCR
         
-        # Initialize PaddleOCR with minimal parameters
-        # This version auto-detects GPU
-        ocr = PaddleOCR(lang=lang)
+        # Initialize PaddleOCR
+        ocr = PaddleOCR(
+            use_angle_cls=True,  # Enable angle classification
+            lang=lang,
+            use_gpu=use_gpu,
+            show_log=False  # Reduce console output
+        )
         
         # Perform OCR
         result = ocr.ocr(str(image_path), cls=True)
@@ -60,14 +64,10 @@ def extract_text_from_image(image_path, use_gpu=True, lang='en'):
                     text = line[1][0]  # Get text from (text, confidence) tuple
                     text_lines.append(text)
         
-        extracted_text = '\n'.join(text_lines)
-        print(f"Extracted {len(text_lines)} line(s) of text")
-        return extracted_text
+        return '\n'.join(text_lines)
     
     except Exception as e:
         print(f"Error processing {image_path}: {e}")
-        import traceback
-        traceback.print_exc()
         return ""
 
 
