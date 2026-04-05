@@ -43,34 +43,86 @@ def extract_text_from_image(image_path, use_gpu=True, lang='en'):
     """
     try:
         from paddleocr import PaddleOCR
-        import os
         
-        # Disable document preprocessor via environment variable
-        os.environ['PADDLE_DISABLE_DOC_PREPROCESSOR'] = '1'
+        # Initialize PaddleOCR with document processing disabled
+        ocr = PaddleOCR(
+            lang=lang,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False
+        )
         
-        # Try minimal initialization - just language
-        ocr = PaddleOCR(lang=lang)
+        # Use predict() with proper text detection parameters
+        # The default limit_side_len=64 is way too small and causes detection to fail
+        result = ocr.predict(
+            str(image_path),
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            text_det_limit_side_len=960,     # Reasonable limit (default was 64!)
+            text_det_limit_type="max",       # Limit the max side, not min
+            text_det_thresh=0.3,             # Detection threshold
+            text_det_box_thresh=0.5,         # Box threshold
+            text_rec_score_thresh=0.5        # Recognition score threshold
+        )
         
-        # Use the ocr() method with cls=False to disable rotation
-        result = ocr.ocr(str(image_path), cls=False)
+        # Debug: Print full result structure
+        import json
+        print(f"\nDEBUG: Got {len(result)} result(s)")
+        for idx, res in enumerate(result):
+            print(f"\nDEBUG: Result {idx} type: {type(res)}")
+            if isinstance(res, dict):
+                print(f"DEBUG: Result {idx} keys: {list(res.keys())}")
+                
+                # Check detection results
+                dt_polys = res.get('dt_polys', [])
+                print(f"DEBUG: Detected {len(dt_polys)} text regions (dt_polys)")
+                
+                # Check recognition results
+                rec_texts = res.get('rec_texts', [])
+                rec_scores = res.get('rec_scores', [])
+                print(f"DEBUG: Recognized {len(rec_texts)} text(s)")
+                
+                # Check important fields
+                if 'input_path' in res:
+                    print(f"DEBUG: Input path: {res['input_path']}")
+                if 'page_orientation' in res:
+                    orientation = res.get('page_orientation', {})
+                    if isinstance(orientation, dict):
+                        print(f"DEBUG: Page orientation angle: {orientation.get('angle', 'N/A')}")
+                    else:
+                        print(f"DEBUG: Page orientation: {orientation}")
+                
+                # Show detection parameters
+                det_params = res.get('text_det_params', {})
+                if det_params:
+                    print(f"DEBUG: Detection params: {json.dumps(det_params, indent=2)}")
+                
+                # Show a sample of the result for diagnosis (truncate large fields)
+                sample = {}
+                for k, v in res.items():
+                    if isinstance(v, (list, dict)):
+                        sample[k] = f"<{type(v).__name__} len={len(v)}>"
+                    elif isinstance(v, str) and len(v) > 100:
+                        sample[k] = v[:100] + "..."
+                    else:
+                        sample[k] = v
+                print(f"DEBUG: Result summary: {json.dumps(sample, indent=2, default=str)}")
+            else:
+                print(f"DEBUG: Result {idx}: {res}")
         
         # Extract text from results
         text_lines = []
-        
-        if result and len(result) > 0:
-            print(f"DEBUG: Got {len(result)} page(s)")
-            for page_idx, page in enumerate(result):
-                if page:
-                    print(f"DEBUG: Page {page_idx} has {len(page)} lines")
-                    for line in page:
-                        if line and len(line) >= 2:
-                            text = line[1][0] if isinstance(line[1], tuple) else line[1]
-                            conf = line[1][1] if isinstance(line[1], tuple) and len(line[1]) > 1 else 0.0
-                            print(f"DEBUG: Text='{text}', conf={conf}")
-                            text_lines.append(str(text))
+        for idx, res in enumerate(result):
+            if isinstance(res, dict):
+                rec_texts = res.get('rec_texts', [])
+                rec_scores = res.get('rec_scores', [])
+                for text, score in zip(rec_texts, rec_scores):
+                    print(f"DEBUG: Text='{text}' (confidence: {score:.3f})")
+                    text_lines.append(str(text))
         
         extracted_text = '\n'.join(text_lines)
-        print(f"Extracted {len(text_lines)} line(s) of text")
+        print(f"\nExtracted {len(text_lines)} line(s) of text")
         return extracted_text
     
     except Exception as e:

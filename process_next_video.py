@@ -65,7 +65,7 @@ def find_unprocessed_folders(base_dir='S:/Videos/Raw'):
     return sorted(leaf_folders)
 
 
-def run_processor(processor_name, folder_path, script_dir):
+def run_processor(processor_name, folder_path, script_dir, processor_level='folder'):
     """
     Run a folder processor on a directory.
     
@@ -73,23 +73,24 @@ def run_processor(processor_name, folder_path, script_dir):
         processor_name: Name of the processor (e.g., 'transcripts', 'thumbs')
         folder_path: Path to folder to process
         script_dir: Path to transcriptions directory
+        processor_level: Level of processor ('folder', 'day', or 'all')
     
     Returns:
         True if successful, False otherwise
     """
-    processor_path = script_dir / 'processors' / 'folder' / f'{processor_name}.py'
+    processor_path = script_dir / 'processors' / processor_level / f'{processor_name}.py'
     
     if not processor_path.exists():
         print(f"Error: Processor not found: {processor_path}")
         return False
     
     print(f"\n{'='*80}")
-    print(f"Running {processor_name.upper()} processor...")
+    print(f"Running {processor_level.upper()} {processor_name.upper()} processor...")
     print('='*80)
     
     try:
         result = subprocess.run(
-            ['python', str(processor_path), str(folder_path), '--continue-on-error'],
+            ['python', str(processor_path), str(folder_path)],
             check=True
         )
         print(f"Success: {processor_name} completed")
@@ -124,15 +125,46 @@ def process_folder(folder_path):
     # Get script directory
     script_dir = Path(__file__).parent.resolve()
     
-    processors = ['transcripts', 'thumbs', 'summaries', 'show_thumbs', 'show_transcripts', 'show_all'] 
+    # Define processor sequences (easy to reorder or add new ones)
+    folder_processors = ['transcripts', 'thumbs', 'summaries', 'show_thumbs', 'show_transcripts', 'show_all']
+    day_processors = ['summaries', 'show_all']
+    all_processors = ['show_all']
     
-    print(f"\nPipeline: {' -> '.join(processors)}")
+    print(f"\nFolder pipeline: {' -> '.join(folder_processors)}")
     print()
     
+    # Run folder processors
     results = {}
-    for processor in processors:
-        success = run_processor(processor, folder_path, script_dir)
-        results[processor] = success
+    all_success = True
+    for processor in folder_processors:
+        success = run_processor(processor, folder_path, script_dir, 'folder')
+        results[f"folder/{processor}"] = success
+        if not success:
+            all_success = False
+    
+    # If folder processing succeeded, run day processors on parent folder
+    day_folder = folder_path.parent
+    if all_success and day_folder.name not in ['', '.', 'Raw']:  # Don't process root-level folders as days
+        print(f"\n{'='*80}")
+        print(f"PROCESSING DAY FOLDER: {day_folder.name}")
+        print('='*80)
+        print(f"Day pipeline: {' -> '.join(day_processors)}")
+        
+        for processor in day_processors:
+            success = run_processor(processor, day_folder, script_dir, 'day')
+            results[f"day/{processor}"] = success
+    
+    # If day processing succeeded, run all processors on grandparent folder
+    all_folder = day_folder.parent
+    if all_success and all_folder.exists() and all_folder.name not in ['', '.']:
+        print(f"\n{'='*80}")
+        print(f"PROCESSING ALL FOLDER: {all_folder.name}")
+        print('='*80)
+        print(f"All pipeline: {' -> '.join(all_processors)}")
+        
+        for processor in all_processors:
+            success = run_processor(processor, all_folder, script_dir, 'all')
+            results[f"all/{processor}"] = success
     
     # Show summary
     print(f"\n{'='*80}")
@@ -142,7 +174,7 @@ def process_folder(folder_path):
     print("\nResults:")
     for processor, success in results.items():
         status = "SUCCESS" if success else "FAILED"
-        print(f"  {processor:20s}: {status}")
+        print(f"  {processor:30s}: {status}")
     
     return True
 
