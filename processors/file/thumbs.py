@@ -120,7 +120,7 @@ def extract_thumbnails(video_path, output_dir, interval=10, quality=2):
             
             thumbnails.append(str(output_file))
         
-        print(f"✓ Extracted {len(thumbnails)} thumbnails")
+        print(f"Extracted {len(thumbnails)} thumbnails")
         
         return thumbnails
         
@@ -172,7 +172,7 @@ def extract_thumbnails_from_file(input_file, interval=10, quality=2):
     )
     
     print(f"\n{'='*60}")
-    print("✓ Thumbnail extraction complete!")
+    print("Thumbnail extraction complete!")
     print(f"  Location: {thumbs_dir}")
     print(f"  Count: {len(thumbnails)} images")
     print('='*60)

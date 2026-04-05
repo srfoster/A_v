@@ -164,7 +164,7 @@ def transcribe_file(input_file, model_name=DEFAULT_MODEL, language=None, cleanup
         save_txt(whisper_result, txt_path)
         
         print(f"\n{'='*60}")
-        print("✓ Transcription complete!")
+        print("Transcription complete!")
         print(f"  SRT: {srt_path}")
         print(f"  TXT: {txt_path}")
         print('='*60)
