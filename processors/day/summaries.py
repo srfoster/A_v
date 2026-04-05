@@ -20,9 +20,16 @@ from pathlib import Path
 import subprocess
 import logging
 from datetime import datetime
+import re
 
 
 DEFAULT_MODEL = 'llama3.2'
+
+
+def strip_ansi_codes(text):
+    """Remove ANSI escape codes from text."""
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+    return ansi_escape.sub('', text)
 
 
 def setup_logging(folder_path):
@@ -97,7 +104,7 @@ def create_combined_summary_text(summaries_data):
     return "\n".join(combined)
 
 
-def generate_meta_summary(combined_text, model='llama3.2', max_words=800, logger=None):
+def generate_meta_summary(combined_text, model='llama3.2', max_words=100, logger=None):
     """
     Generate a meta-summary from the combined summaries using Ollama.
     
@@ -110,17 +117,14 @@ def generate_meta_summary(combined_text, model='llama3.2', max_words=800, logger
     Returns:
         The meta-summary text or None if failed
     """
-    prompt = f"""You are summarizing a collection of video summaries from a single day.
-Below are summaries of multiple videos. Create a cohesive day-level summary that:
-- Identifies common themes across the videos
-- Highlights the most important content
-- Provides a narrative overview of the day
-- Keep it to approximately {max_words} words
+    prompt = f"""Summarize what videos were created today and their topics. Be concise and factual.
+Write a brief list-style summary in {max_words} words or less.
+Just state what videos were made and what each covers. No narrative, no themes analysis.
 
 ===== VIDEO SUMMARIES =====
 {combined_text}
 
-===== DAY SUMMARY ====="""
+===== DAY SUMMARY ({max_words} words max) ====="""
 
     try:
         if logger:
@@ -139,6 +143,8 @@ Below are summaries of multiple videos. Create a cohesive day-level summary that
         
         if result.returncode == 0:
             summary = result.stdout.strip()
+            # Strip ANSI escape codes from output
+            summary = strip_ansi_codes(summary)
             if logger:
                 logger.info(f"Generated meta-summary ({len(summary.split())} words)")
             return summary

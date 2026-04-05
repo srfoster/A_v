@@ -97,7 +97,7 @@ def find_video_folders(day_folder):
     subfolders = []
     
     for item in sorted(day_folder.iterdir()):
-        if item.is_dir() and not item.name.startswith('.') and item.name not in ['logs', 'show_all']:
+        if item.is_dir() and not item.name.startswith('.') and item.name not in ['logs', 'show_all', 'summaries']:
             show_all_index = item / 'show_all' / 'index.html'
             
             # Find first video file in subfolder
@@ -134,10 +134,26 @@ def read_first_summary(folder):
         return None
 
 
+def read_day_summary(day_folder):
+    """Read the day summary file if it exists."""
+    summary_file = day_folder / 'summaries' / 'day_summary.txt'
+    if not summary_file.exists():
+        return None
+    
+    try:
+        with open(summary_file, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+
 def generate_html(day_folder, video_folders):
     """Generate the day-level index HTML page."""
     
     day_name = day_folder.name
+    
+    # Read day summary if it exists
+    day_summary = read_day_summary(day_folder)
     
     # Build video list HTML
     videos_html = ""
@@ -383,6 +399,31 @@ def generate_html(day_folder, video_folders):
             color: #858585;
             font-size: 14px;
         }}
+        
+        .day-summary {{
+            background: #2d2d30;
+            border-left: 4px solid #0e639c;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 30px;
+        }}
+        
+        .day-summary-header {{
+            color: #ffffff;
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        
+        .day-summary-content {{
+            color: #d4d4d4;
+            font-size: 15px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+        }}
     </style>
 </head>
 <body>
@@ -391,6 +432,14 @@ def generate_html(day_folder, video_folders):
             <h1>📅 {day_name}</h1>
             <p class="subtitle">Video Collection</p>
         </div>
+        
+        {f'''<div class="day-summary">
+            <div class="day-summary-header">
+                <span>📝</span>
+                <span>Day Summary</span>
+            </div>
+            <div class="day-summary-content">{day_summary}</div>
+        </div>''' if day_summary else ''}
         
         {"<ul class='video-list'>" + videos_html + "</ul>" if video_folders else '''
         <div class="empty-state">

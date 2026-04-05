@@ -52,18 +52,17 @@ def extract_text_from_image(image_path, use_gpu=True, lang='en'):
             use_textline_orientation=False
         )
         
-        # Use predict() with proper text detection parameters
-        # The default limit_side_len=64 is way too small and causes detection to fail
+        # Use predict() with very lenient detection parameters to maximize detection
         result = ocr.predict(
             str(image_path),
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
-            text_det_limit_side_len=960,     # Reasonable limit (default was 64!)
-            text_det_limit_type="max",       # Limit the max side, not min
-            text_det_thresh=0.3,             # Detection threshold
-            text_det_box_thresh=0.5,         # Box threshold
-            text_rec_score_thresh=0.5        # Recognition score threshold
+            text_det_limit_side_len=1920,    # Higher resolution
+            text_det_limit_type="max",       
+            text_det_thresh=0.1,             # Much lower threshold (0.1 instead of 0.3)
+            text_det_box_thresh=0.3,         # Lower box threshold (0.3 instead of 0.5)
+            text_rec_score_thresh=0.3        # Lower recognition threshold
         )
         
         # Debug: Print full result structure
