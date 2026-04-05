@@ -43,31 +43,31 @@ def extract_text_from_image(image_path, use_gpu=True, lang='en'):
     """
     try:
         from paddleocr import PaddleOCR
+        import os
         
-        # Initialize PaddleOCR
-        ocr = PaddleOCR(
-            lang=lang,
-            device='gpu:0' if use_gpu else 'cpu'
-        )
+        # Disable document preprocessor via environment variable
+        os.environ['PADDLE_DISABLE_DOC_PREPROCESSOR'] = '1'
         
-        # Perform OCR with doc preprocessor disabled to avoid rotation issues
-        result = ocr.predict(
-            str(image_path),
-            use_doc_preprocessor=False  # Disable auto-rotation
-        )
+        # Try minimal initialization - just language
+        ocr = PaddleOCR(lang=lang)
+        
+        # Use the ocr() method with cls=False to disable rotation
+        result = ocr.ocr(str(image_path), cls=False)
         
         # Extract text from results
-        # PaddleOCR 3.2.0 returns OCRResult objects
         text_lines = []
         
-        if result:
-            for item in result:
-                # OCRResult object has rec_texts attribute
-                if hasattr(item, 'rec_texts') and item.rec_texts:
-                    text_lines.extend(item.rec_texts)
-                # Fallback for other formats
-                elif isinstance(item, dict) and 'rec_texts' in item:
-                    text_lines.extend(item['rec_texts'])
+        if result and len(result) > 0:
+            print(f"DEBUG: Got {len(result)} page(s)")
+            for page_idx, page in enumerate(result):
+                if page:
+                    print(f"DEBUG: Page {page_idx} has {len(page)} lines")
+                    for line in page:
+                        if line and len(line) >= 2:
+                            text = line[1][0] if isinstance(line[1], tuple) else line[1]
+                            conf = line[1][1] if isinstance(line[1], tuple) and len(line[1]) > 1 else 0.0
+                            print(f"DEBUG: Text='{text}', conf={conf}")
+                            text_lines.append(str(text))
         
         extracted_text = '\n'.join(text_lines)
         print(f"Extracted {len(text_lines)} line(s) of text")

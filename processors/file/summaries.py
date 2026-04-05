@@ -47,7 +47,7 @@ def summarize_with_ollama(text, model_name='llama3.2', max_words=500):
     try:
         import ollama
         
-        prompt = f"""Please provide a concise summary of the following text in approximately {max_words} words or less.
+        prompt = f"""Please provide a concise description of the following text in approximately {max_words} words or less.
 Focus on the main points, key topics, and important details.
 
 TEXT TO SUMMARIZE:
