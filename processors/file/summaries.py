@@ -4,6 +4,9 @@ File Summary Processor
 Summarizes a single text file using Ollama's local LLM.
 Outputs summary to 'summaries/' folder alongside the input file.
 
+By default, generates a summary that is ~10% of the input file's word count
+(minimum 50 words, maximum 1000 words).
+
 Usage:
     python summaries.py FILE.txt
     
@@ -96,6 +99,16 @@ def summarize_file(input_file, model='llama3.2', max_words=500):
     word_count = len(content.split())
     print(f"File size: {len(content)} characters, ~{word_count} words")
     
+    # Calculate target summary size (10% of input, with reasonable bounds)
+    calculated_max_words = max(50, min(1000, int(word_count * 0.1)))
+    
+    # Override max_words if it was user-specified, otherwise use calculated
+    if max_words == 500:  # Default value, use calculated instead
+        max_words = calculated_max_words
+        print(f"Target summary size: ~{max_words} words (10% of input)")
+    else:
+        print(f"Target summary size: ~{max_words} words (user-specified)")
+    
     # Truncate if too long
     max_words_input = 20000
     if word_count > max_words_input:
@@ -170,7 +183,7 @@ Examples:
         '--max-words',
         type=int,
         default=500,
-        help='Target words in summary (default: 500)'
+        help='Target words in summary (default: auto-calculate as 10%% of input, min 50, max 1000)'
     )
     
     args = parser.parse_args()

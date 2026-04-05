@@ -1,36 +1,31 @@
 #!/usr/bin/env python3
 """
 Process Next Video Script
-Automatically finds and processes the next unprocessed MP4 file in S:\Videos\Raw\
+Automatically finds and processes the next unprocessed video folder in S:\Videos\Raw\
 
-Runs the complete video processing pipeline:
-1. Transcribes audio with Whisper (generates SRT and TXT)
-2. Extracts thumbnail images at intervals
-3. Performs OCR on thumbnails to extract text
-4. Creates a SUMMARY.txt file to mark the video as processed
+A folder is considered processed if it contains a logs/ directory.
+Runs folder processors in order: transcripts -> thumbs -> ocr_extractions -> gifs -> summaries
 """
 
-import os
 import sys
 import subprocess
-import argparse
-import json
 from pathlib import Path
 from datetime import datetime
 
 
-def find_unprocessed_videos(base_dir='S:/Videos/Raw'):
+def find_unprocessed_folders(base_dir='S:/Videos/Raw'):
     """
-    Find all MP4 files in the Videos/Raw directory that haven't been processed.
+    Find all video folders that haven't been processed.
     
-    A video is considered processed if it has a directory with the same name
-    containing a SUMMARY.txt file.
+    Recursively searches for folders containing video files (e.g., S:/Videos/Raw/2026-04-05/10-24-15/).
+    A folder is considered processed if it contains a logs/ subdirectory.
+    Only returns "leaf" folders (folders with videos, not their parents).
     
     Args:
         base_dir: Base directory to search (default: S:/Videos/Raw)
     
     Returns:
-        List of Path objects for unprocessed MP4 files
+        List of Path objects for unprocessed video folders, sorted by path
     """
     base_path = Path(base_dir)
     
@@ -38,392 +33,141 @@ def find_unprocessed_videos(base_dir='S:/Videos/Raw'):
         print(f"Error: Base directory not found: {base_dir}")
         return []
     
-    # Find all MP4 files recursively
-    all_videos = sorted(base_path.rglob('*.mp4'))
+    # Recursively find all subdirectories at any depth
+    all_folders = [d for d in base_path.rglob('*') if d.is_dir()]
     
-    unprocessed = []
-    for video in all_videos:
-        # Expected output directory (same parent, named after video stem)
-        output_dir = video.parent / video.stem
-        summary_file = output_dir / 'SUMMARY.txt'
+    # Filter to video folders that don't have logs/ (unprocessed)
+    video_folders = []
+    for folder in all_folders:
+        logs_dir = folder / 'logs'
+        if not logs_dir.exists():
+            # Check if this folder directly contains video files
+            video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv'}
+            try:
+                has_video = any(f.suffix.lower() in video_extensions for f in folder.iterdir() if f.is_file())
+                
+                if has_video:
+                    video_folders.append(folder)
+            except (PermissionError, OSError):
+                # Skip folders we can't read
+                continue
+    
+    # Filter to only "leaf" folders - folders that don't have child video folders
+    # This prevents processing both "2026-04-03" and "2026-04-03/10-24-15"
+    leaf_folders = []
+    for folder in video_folders:
+        # Check if any other video folder is a child of this one
+        is_parent = any(other != folder and other.is_relative_to(folder) for other in video_folders)
         
-        # Check if summary file exists
-        if not summary_file.exists():
-            unprocessed.append(video)
+        if not is_parent:
+            leaf_folders.append(folder)
     
-    return unprocessed
+    return sorted(leaf_folders)
 
 
-def run_command(cmd, description, shell=False):
+def run_processor(processor_name, folder_path, script_dir):
     """
-    Run a command and print status.
+    Run a folder processor on a directory.
     
     Args:
-        cmd: Command to run (list or string)
-        description: Description of what the command does
-        shell: Whether to run in shell
+        processor_name: Name of the processor (e.g., 'transcripts', 'thumbs')
+        folder_path: Path to folder to process
+        script_dir: Path to transcriptions directory
     
     Returns:
         True if successful, False otherwise
     """
-    print(f"\n{'='*60}")
-    print(f"{description}...")
-    print('='*60)
+    processor_path = script_dir / 'processors' / 'folder' / f'{processor_name}.py'
+    
+    if not processor_path.exists():
+        print(f"Error: Processor not found: {processor_path}")
+        return False
+    
+    print(f"\n{'='*80}")
+    print(f"Running {processor_name.upper()} processor...")
+    print('='*80)
     
     try:
         result = subprocess.run(
-            cmd,
-            check=True,
-            shell=shell,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True
+            ['python', str(processor_path), str(folder_path), '--continue-on-error'],
+            check=True
         )
-        print(result.stdout)
-        print(f"✓ {description} completed successfully")
+        print(f"Success: {processor_name} completed")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"✗ {description} failed:")
-        print(e.stdout)
+        print(f"Warning: {processor_name} failed (continuing anyway)")
         return False
 
 
-def process_video(video_path, model='base', interval=10, skip_ocr=False):
+def process_folder(folder_path):
     """
-    Process a video file through the complete pipeline.
+    Process a video folder through the complete pipeline using folder processors.
     
     Args:
-        video_path: Path to video file
-        model: Whisper model to use (default: base)
-        interval: Thumbnail interval in seconds (default: 10)
-        skip_ocr: Skip OCR processing (default: False)
+        folder_path: Path to folder containing video files
     
     Returns:
-        True if all steps succeeded, False otherwise
+        True if successful, False otherwise
     """
-    video_path = Path(video_path)
+    folder_path = Path(folder_path)
     
-    if not video_path.exists():
-        print(f"Error: Video file not found: {video_path}")
+    if not folder_path.exists():
+        print(f"Error: Folder not found: {folder_path}")
         return False
     
-    print(f"\nProcessing video: {video_path}")
-    print(f"Whisper model: {model}")
-    print(f"Thumbnail interval: {interval} seconds")
+    print(f"\n{'='*80}")
+    print(f"PROCESSING FOLDER: {folder_path.name}")
+    print('='*80)
+    print(f"Full path: {folder_path}")
+    print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # Determine output directory (same parent as video, named after video)
-    output_dir = video_path.parent / video_path.stem
-    
-    # Get script directory for running commands
+    # Get script directory
     script_dir = Path(__file__).parent.resolve()
     
-    # Step 1: Transcribe audio
-    transcribe_cmd = [
-        'python', str(script_dir / 'transcribe.py'),
-        str(video_path),
-        '-m', model
-    ]
+    # Pipeline order: transcripts -> thumbs -> ocr_extractions -> gifs -> summaries
+    processors = ['transcripts', 'thumbs', 'ocr_extractions', 'gifs', 'summaries']
     
-    if not run_command(transcribe_cmd, "Transcribing audio"):
-        print("\n⚠ Transcription failed, continuing with thumbnails...")
+    print(f"\nPipeline: {' -> '.join(processors)}")
+    print()
     
-    # Step 2: Extract thumbnails
-    thumbs_cmd = [
-        'python', str(script_dir / 'thumbs.py'),
-        str(video_path),
-        '-i', str(interval)
-    ]
+    results = {}
+    for processor in processors:
+        success = run_processor(processor, folder_path, script_dir)
+        results[processor] = success
     
-    if not run_command(thumbs_cmd, "Extracting thumbnails"):
-        print("\n⚠ Thumbnail extraction failed, skipping OCR")
-        return False
-    
-    # Step 3: OCR on thumbnails
-    # Use the batch wrapper to handle DLL paths
-    thumbs_dir = output_dir
-    
-    if not thumbs_dir.exists():
-        print(f"\n⚠ Thumbnails directory not found: {thumbs_dir}")
-        print("Skipping OCR step")
-        return False
-    
-    # Count PNG files
-    png_files = list(thumbs_dir.glob('*.png'))
-    if not png_files:
-        print(f"\n⚠ No PNG files found in {thumbs_dir}")
-        print("Skipping OCR step")
-        return False
-    
-    print(f"\nFound {len(png_files)} thumbnail(s) for OCR processing")
-    
-    # Skip OCR if requested
-    if skip_ocr:
-        print("\n⚠ OCR skipped (--skip-ocr flag set)")
-        ocr_success = True  # Mark as successful so we continue
-    else:
-        # Run OCR using the batch wrapper (Windows) or direct python (Unix)
-        ocr_success = False
-    if sys.platform == 'win32':
-        # Use batch file wrapper on Windows to handle DLL paths
-        # Must run from the script directory where the batch file is located
-        script_dir = Path(__file__).parent.resolve()
-        ocr_cmd = f'cd /d "{script_dir}" && run_text_extract.bat "{thumbs_dir}"'
-        ocr_success = run_command(ocr_cmd, "Performing OCR on thumbnails", shell=True)
-    else:
-        # Direct python call on Unix
-        ocr_cmd = ['python', 'text_extract.py', str(thumbs_dir)]
-        ocr_success = run_command(ocr_cmd, "Performing OCR on thumbnails")
-    
-    if not ocr_success:
-        print("\n⚠ OCR failed - continuing anyway to create summary")
-    
-    # Step 4: Create summary file
-    summary_file = output_dir / 'SUMMARY.txt'
-    
-    try:
-        with open(summary_file, 'w', encoding='utf-8') as f:
-            f.write(f"Video Processing Summary\n")
-            f.write(f"{'='*60}\n\n")
-            f.write(f"Video File: {video_path.name}\n")
-            f.write(f"Full Path: {video_path}\n")
-            f.write(f"Processed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            
-            # Video file info
-            file_size = video_path.stat().st_size
-            size_mb = file_size / (1024 * 1024)
-            f.write(f"Video Size: {size_mb:.2f} MB\n")
-            
-            f.write(f"\nProcessing Settings:\n")
-            f.write(f"  Whisper Model: {model}\n")
-            f.write(f"  Thumbnail Interval: {interval} seconds\n")
-            
-            f.write(f"\nOutput Directory: {output_dir}\n\n")
-            
-            # Count generated files
-            srt_files = list(output_dir.glob('*.srt'))
-            txt_files = [f for f in output_dir.glob('*.txt') if f.name != 'SUMMARY.txt']
-            png_files = list(output_dir.glob('*.png'))
-            json_files = list(output_dir.glob('*.json'))
-            
-            f.write(f"{'='*60}\n")
-            f.write(f"Generated Files Summary:\n")
-            f.write(f"{'='*60}\n")
-            f.write(f"  Subtitle files (SRT): {len(srt_files)}\n")
-            f.write(f"  Transcript files (TXT): {len(txt_files)}\n")
-            f.write(f"  Thumbnail images (PNG): {len(png_files)}\n")
-            f.write(f"  OCR data (JSON): {len(json_files)}\n")
-            
-            # List SRT files with content preview
-            if srt_files:
-                f.write(f"\n{'='*60}\n")
-                f.write(f"Subtitle Files (SRT):\n")
-                f.write(f"{'='*60}\n")
-                for srt in sorted(srt_files):
-                    f.write(f"\n📄 {srt.name}\n")
-                    f.write(f"   Size: {srt.stat().st_size / 1024:.1f} KB\n")
-                    try:
-                        content = srt.read_text(encoding='utf-8')
-                        lines = content.split('\n')
-                        # Show first 15 lines of SRT (usually 3-5 subtitle entries)
-                        preview_lines = lines[:15]
-                        f.write(f"   Preview (first {min(15, len(lines))} lines):\n")
-                        f.write("   " + "-" * 55 + "\n")
-                        for line in preview_lines:
-                            f.write(f"   {line}\n")
-                        if len(lines) > 15:
-                            f.write(f"   ... ({len(lines) - 15} more lines)\n")
-                        f.write("   " + "-" * 55 + "\n")
-                    except Exception as e:
-                        f.write(f"   (Could not read file: {e})\n")
-            
-            # List TXT files with content preview
-            if txt_files:
-                f.write(f"\n{'='*60}\n")
-                f.write(f"Transcript Files (TXT):\n")
-                f.write(f"{'='*60}\n")
-                for txt in sorted(txt_files):
-                    f.write(f"\n📄 {txt.name}\n")
-                    f.write(f"   Size: {txt.stat().st_size / 1024:.1f} KB\n")
-                    try:
-                        content = txt.read_text(encoding='utf-8')
-                        word_count = len(content.split())
-                        f.write(f"   Length: {len(content)} characters, ~{word_count} words\n")
-                        
-                        # Show first 300 characters
-                        preview = content[:300] if len(content) > 300 else content
-                        f.write(f"   Preview:\n")
-                        f.write("   " + "-" * 55 + "\n")
-                        for line in preview.split('\n')[:10]:  # Max 10 lines
-                            f.write(f"   {line}\n")
-                        if len(content) > 300:
-                            f.write(f"   ... ({len(content) - 300} more characters)\n")
-                        f.write("   " + "-" * 55 + "\n")
-                    except Exception as e:
-                        f.write(f"   (Could not read file: {e})\n")
-            
-            # List PNG thumbnail files with OCR text
-            if png_files:
-                f.write(f"\n{'='*60}\n")
-                f.write(f"Thumbnail Images (PNG): {len(png_files)} files\n")
-                f.write(f"{'='*60}\n")
-                
-                # Show first 10 and last 5 thumbnails with their OCR text
-                sorted_pngs = sorted(png_files)
-                sample_pngs = sorted_pngs[:10] + (sorted_pngs[-5:] if len(sorted_pngs) > 15 else [])
-                sample_pngs = list(dict.fromkeys(sample_pngs))  # Remove duplicates while preserving order
-                
-                for png in sample_pngs[:15]:
-                    f.write(f"\n🖼️  {png.name}")
-                    f.write(f" ({png.stat().st_size / 1024:.1f} KB)\n")
-                    
-                    # Try to read corresponding OCR text file
-                    txt_file = png.with_suffix('.txt')
-                    if txt_file.exists():
-                        try:
-                            ocr_text = txt_file.read_text(encoding='utf-8').strip()
-                            if ocr_text:
-                                # Show first 200 chars of OCR text
-                                preview = ocr_text[:200] if len(ocr_text) > 200 else ocr_text
-                                f.write(f"   OCR Text: {preview}")
-                                if len(ocr_text) > 200:
-                                    f.write(f"...")
-                                f.write(f"\n")
-                            else:
-                                f.write(f"   OCR Text: (no text detected)\n")
-                        except Exception as e:
-                            f.write(f"   OCR Text: (could not read)\n")
-                    else:
-                        f.write(f"   OCR Text: (no OCR file)\n")
-                
-                if len(png_files) > 15:
-                    f.write(f"\n   ... and {len(png_files) - 15} more thumbnail files\n")
-            
-            # List JSON files with summary
-            if json_files:
-                f.write(f"\n{'='*60}\n")
-                f.write(f"JSON Data Files:\n")
-                f.write(f"{'='*60}\n")
-                for json_file in sorted(json_files):
-                    f.write(f"\n📊 {json_file.name}\n")
-                    f.write(f"   Size: {json_file.stat().st_size / 1024:.1f} KB\n")
-                    try:
-                        with open(json_file, 'r', encoding='utf-8') as jf:
-                            data = json.load(jf)
-                        f.write(f"   Type: {type(data).__name__}\n")
-                        if isinstance(data, dict):
-                            f.write(f"   Keys: {len(data)} items\n")
-                        elif isinstance(data, list):
-                            f.write(f"   Items: {len(data)}\n")
-                    except Exception as e:
-                        f.write(f"   (Could not parse JSON: {e})\n")
-            
-            # Read and include OCR results
-            f.write(f"\n{'='*60}\n")
-            f.write(f"OCR Results Summary:\n")
-            f.write(f"{'='*60}\n")
-            
-            ocr_json = output_dir / 'ocr_results.json'
-            if ocr_json.exists():
-                try:
-                    with open(ocr_json, 'r', encoding='utf-8') as ocr_file:
-                        ocr_data = json.load(ocr_file)
-                    
-                    total_regions = sum(len(regions) for regions in ocr_data.values())
-                    images_with_text = sum(1 for regions in ocr_data.values() if regions)
-                    
-                    f.write(f"\nTotal text regions detected: {total_regions}\n")
-                    f.write(f"Images with text: {images_with_text} / {len(ocr_data)}\n")
-                    
-                    # Collect all text with confidence scores
-                    all_texts = []
-                    for img_name, regions in ocr_data.items():
-                        for region in regions:
-                            all_texts.append({
-                                'text': region.get('text', ''),
-                                'confidence': region.get('confidence', 0),
-                                'image': img_name
-                            })
-                    
-                    if all_texts:
-                        # Sort by confidence
-                        all_texts.sort(key=lambda x: x['confidence'], reverse=True)
-                        
-                        # Calculate statistics
-                        avg_conf = sum(t['confidence'] for t in all_texts) / len(all_texts)
-                        high_conf = [t for t in all_texts if t['confidence'] > 0.7]
-                        
-                        f.write(f"Average confidence: {avg_conf:.2%}\n")
-                        f.write(f"High confidence detections (>70%): {len(high_conf)}\n")
-                        
-                        # Show top detections
-                        f.write(f"\nTop 10 highest confidence detections:\n")
-                        for i, item in enumerate(all_texts[:10], 1):
-                            f.write(f"  {i}. '{item['text']}' - {item['confidence']:.2%} ({item['image']})\n")
-                        
-                        # Show unique text found
-                        unique_texts = set(t['text'].strip().lower() for t in all_texts if t['text'].strip())
-                        f.write(f"\nUnique text elements found: {len(unique_texts)}\n")
-                        
-                        if len(unique_texts) > 0:
-                            sample_texts = sorted(unique_texts)[:20]
-                            f.write(f"\nSample of detected text:\n")
-                            for text in sample_texts:
-                                f.write(f"  - {text}\n")
-                            if len(unique_texts) > 20:
-                                f.write(f"  ... and {len(unique_texts) - 20} more\n")
-                    else:
-                        f.write("\n(No text detected in images)\n")
-                        
-                except Exception as e:
-                    f.write(f"\n(Could not read OCR results: {e})\n")
-            else:
-                f.write("\n(No OCR results file found)\n")
-            
-            # Add footer
-            f.write(f"\n{'='*60}\n")
-            f.write(f"Processing complete!\n")
-            f.write(f"{'='*60}\n")
-            
-        print(f"\n✓ Summary file created: {summary_file}")
-        
-    except Exception as e:
-        print(f"\n⚠ Failed to create summary file: {e}")
-        return False
-    
-    print(f"\n{'='*60}")
-    print("✓ Video processing complete!")
-    print('='*60)
-    print(f"\nOutput directory: {output_dir}")
-    print("\nGenerated files:")
-    print("  - *.srt (subtitles)")
-    print("  - *.txt (transcript)")
-    print("  - thumb_*.png (thumbnails)")
-    print("  - thumb_*.txt (OCR text from thumbnails)")
-    print("  - SUMMARY.txt (processing summary)")
+    # Show summary
+    print(f"\n{'='*80}")
+    print("PROCESSING COMPLETE")
+    print('='*80)
+    print(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("\nResults:")
+    for processor, success in results.items():
+        status = "SUCCESS" if success else "FAILED"
+        print(f"  {processor:20s}: {status}")
     
     return True
 
 
 def main():
+    """Main entry point."""
+    import argparse
+    
     parser = argparse.ArgumentParser(
-        description='Automatically find and process the next unprocessed MP4 in S:\\Videos\\Raw\\',
+        description='Automatically find and process the next unprocessed folder in S:\\Videos\\Raw\\',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-This script scans S:\\Videos\\Raw\\ for MP4 files that haven't been processed yet.
-A video is considered processed if it has a SUMMARY.txt file in its output folder.
+A folder is considered processed if it contains a logs/ subdirectory.
+This script processes folders containing video files using the folder processors.
 
 Examples:
-  # Process the next unprocessed video with default settings
+  # Process the next unprocessed folder
   python process_next_video.py
-  
-  # Use a different Whisper model
-  python process_next_video.py -m medium
-  
-  # Extract thumbnails every 5 seconds
-  python process_next_video.py -i 5
   
   # Search in a different directory
   python process_next_video.py -d D:\\MyVideos
+  
+  # List all unprocessed folders
+  python process_next_video.py --list
         """
     )
     
@@ -433,65 +177,48 @@ Examples:
         help='Base directory to search for videos (default: S:/Videos/Raw)'
     )
     parser.add_argument(
-        '-m', '--model',
-        default='base',
-        choices=['tiny', 'base', 'small', 'medium', 'large'],
-        help='Whisper model size (default: base)'
-    )
-    parser.add_argument(
-        '-i', '--interval',
-        type=int,
-        default=10,
-        help='Thumbnail extraction interval in seconds (default: 10)'
-    )
-    parser.add_argument(
         '--list',
         action='store_true',
-        help='List all unprocessed videos and exit (don\'t process anything)'
-    )
-    parser.add_argument(
-        '--skip-ocr',
-        action='store_true',
-        help='Skip OCR processing (only transcribe and extract thumbnails)'
+        help='List all unprocessed folders and exit (don\'t process anything)'
     )
     
     args = parser.parse_args()
     
     try:
-        # Find unprocessed videos
-        print(f"Scanning for unprocessed MP4 files in {args.directory}...")
-        unprocessed = find_unprocessed_videos(args.directory)
+        # Find unprocessed folders
+        print(f"Scanning for unprocessed folders in {args.directory}...")
+        unprocessed = find_unprocessed_folders(args.directory)
         
         if not unprocessed:
-            print("\n✓ No unprocessed videos found!")
-            print("All MP4 files have been processed.")
+            print("\nNo unprocessed folders found!")
+            print("All folders have been processed.")
             sys.exit(0)
         
-        print(f"\nFound {len(unprocessed)} unprocessed video(s)")
+        print(f"\nFound {len(unprocessed)} unprocessed folder(s)")
         
         # If --list flag, just show them and exit
         if args.list:
-            print("\nUnprocessed videos:")
-            for i, video in enumerate(unprocessed, 1):
-                print(f"  {i}. {video}")
+            print("\nUnprocessed folders:")
+            for i, folder in enumerate(unprocessed, 1):
+                print(f"  {i}. {folder}")
             sys.exit(0)
         
-        # Process the first unprocessed video
-        next_video = unprocessed[0]
+        # Process the first unprocessed folder
+        next_folder = unprocessed[0]
         
-        print(f"\n{'='*60}")
-        print(f"Processing next video ({1} of {len(unprocessed)} unprocessed):")
-        print(f"  {next_video}")
-        print('='*60)
+        print(f"\n{'='*80}")
+        print(f"Processing folder 1 of {len(unprocessed)} unprocessed:")
+        print(f"  {next_folder}")
+        print('='*80)
         
-        success = process_video(next_video, args.model, args.interval, args.skip_ocr)
+        success = process_folder(next_folder)
         
         if success:
             remaining = len(unprocessed) - 1
             if remaining > 0:
-                print(f"\n✓ Processing complete! {remaining} video(s) remaining.")
+                print(f"\nProcessing complete! {remaining} folder(s) remaining.")
             else:
-                print(f"\n✓ Processing complete! All videos processed.")
+                print(f"\nProcessing complete! All folders processed.")
         
         sys.exit(0 if success else 1)
         
@@ -499,7 +226,9 @@ Examples:
         print("\n\nProcessing interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\nError: {e}", file=sys.stderr)
+        print(f"\nError: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
