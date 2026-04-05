@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 File OCR Extraction Processor
-Extracts text from a single PNG image using PaddleOCR.
+Extracts text from a single PNG image using DeepSeek-OCR-2.
 Outputs OCR text to 'ocr_extractions/' folder.
 
 Usage:
@@ -17,75 +17,99 @@ import argparse
 from pathlib import Path
 
 
-def check_paddleocr():
-    """Check if PaddleOCR is available."""
+def check_dependencies():
+    """Check if required packages are available."""
+    errors = []
+    
     try:
-        import paddleocr
-        return True
+        import transformers
     except ImportError:
-        print("ERROR: paddleocr package not installed!")
+        errors.append("transformers package not installed")
+    
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            errors.append("CUDA not available - DeepSeek-OCR-2 requires GPU")
+    except ImportError:
+        errors.append("torch package not installed")
+    
+    try:
+        import flash_attn
+    except ImportError:
+        errors.append("flash-attn package not installed")
+    
+    if errors:
+        print("ERROR: Missing dependencies!")
+        for error in errors:
+            print(f"  - {error}")
         print("\nPlease install with:")
-        print("  pip install paddleocr")
+        print("  pip install torch transformers")
+        print("  pip install flash-attn==2.7.3 --no-build-isolation")
         return False
+    
+    return True
 
 
 def extract_text_from_image(image_path, use_gpu=True, lang='en'):
     """
-    Extract text from an image using PaddleOCR.
+    Extract text from an image using DeepSeek-OCR-2.
     
     Args:
         image_path: Path to image file
-        use_gpu: Whether to use GPU acceleration
-        lang: Language code (default: 'en')
+        use_gpu: Whether to use GPU acceleration (required for DeepSeek-OCR-2)
+        lang: Language code (not used, DeepSeek is multilingual)
     
     Returns:
         Extracted text as string
     """
     try:
-        from paddleocr import PaddleOCR
+        from transformers import AutoModel, AutoTokenizer
+        import torch
         
-        # Initialize with proper detection parameters at init time
-        # Lower thresholds significantly to maximize detection sensitivity
-        ocr = PaddleOCR(
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            text_det_limit_side_len=1920,    # Fix the terrible default of 64!
-            text_det_limit_type='max',       # Use max not min
-            text_det_thresh=0.1,             # Lower from 0.3 to 0.1
-            text_det_box_thresh=0.3          # Lower from 0.5 to 0.3
+        if not use_gpu:
+            print("Warning: DeepSeek-OCR-2 requires GPU. Falling back to GPU mode.")
+        
+        # Check if CUDA is available
+        if not torch.cuda.is_available():
+            print("Error: CUDA not available. DeepSeek-OCR-2 requires GPU.")
+            return ""
+        
+        print("Loading DeepSeek-OCR-2 model (this may take a while on first run)...")
+        model_name = 'deepseek-ai/DeepSeek-OCR-2'
+        
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        model = AutoModel.from_pretrained(
+            model_name,
+            _attn_implementation='flash_attention_2',
+            trust_remote_code=True,
+            use_safetensors=True
+        )
+        model = model.eval().cuda().to(torch.bfloat16)
+        
+        # Use "Free OCR" prompt for simple text extraction
+        prompt = "<image>\nFree OCR. "
+        
+        print("Running OCR inference...")
+        # Perform OCR inference
+        result = model.infer(
+            tokenizer,
+            prompt=prompt,
+            image_file=str(image_path),
+            base_size=1024,
+            image_size=768,
+            crop_mode=True,
+            save_results=False
         )
         
-        # Use predict() with input parameter as per docs
-        result = ocr.predict(input=str(image_path))
+        # Extract the text from result
+        if isinstance(result, dict) and 'text' in result:
+            extracted_text = result['text']
+        elif isinstance(result, str):
+            extracted_text = result
+        else:
+            extracted_text = str(result)
         
-        # Extract text using the result object methods
-        text_lines = []
-        
-        print(f"\nDEBUG: Got {len(result)} result(s)")
-        for idx, res in enumerate(result):
-            print(f"DEBUG: Result {idx} type: {type(res)}")
-            
-            # Use the object's methods as per docs
-            print("\nDEBUG: Calling res.print():")
-            res.print()
-            
-            # Try to access text data - result objects should have these attributes
-            if hasattr(res, 'rec_texts'):
-                texts = res.rec_texts
-                print(f"DEBUG: Found {len(texts)} texts via res.rec_texts")
-                text_lines.extend([str(t) for t in texts])
-            elif hasattr(res, '__dict__'):
-                print(f"DEBUG: Result attributes: {list(res.__dict__.keys())}")
-            
-            # Also try dict-style access since it worked before
-            if isinstance(res, dict):
-                rec_texts = res.get('rec_texts', [])
-                print(f"DEBUG: Found {len(rec_texts)} texts via dict access")
-                text_lines.extend([str(t) for t in rec_texts])
-        
-        extracted_text = '\n'.join(text_lines)
-        print(f"\nExtracted {len(text_lines)} line(s) of text")
+        print(f"Extracted text length: {len(extracted_text)} characters")
         return extracted_text
     
     except Exception as e:
@@ -101,8 +125,8 @@ def extract_ocr_from_file(input_file, use_gpu=True, lang='en'):
     
     Args:
         input_file: Path to input PNG file
-        use_gpu: Whether to use GPU acceleration
-        lang: Language code
+        use_gpu: Whether to use GPU acceleration (required for DeepSeek-OCR-2)
+        lang: Language code (not used, DeepSeek is multilingual)
     
     Returns:
         Dictionary with output information
@@ -121,7 +145,7 @@ def extract_ocr_from_file(input_file, use_gpu=True, lang='en'):
         print(f"Warning: File may not be an image")
     
     # Extract text using PaddleOCR
-    print(f"Extracting text using PaddleOCR ({'GPU' if use_gpu else 'CPU'})...")
+    print(f"Extracting text using DeepSeek-OCR-2 (GPU required)...")
     text = extract_text_from_image(input_path, use_gpu, lang)
     
     # Create ocr_extractions/ folder at the root level
@@ -162,13 +186,12 @@ def extract_ocr_from_file(input_file, use_gpu=True, lang='en'):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Extract OCR text from a single PNG file using PaddleOCR',
+        description='Extract OCR text from a single PNG file using DeepSeek-OCR-2',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python ocr_extractions.py image.png
-  python ocr_extractions.py thumb_00-10.png --cpu
-  python ocr_extractions.py image.png -l ch  # Chinese
+  python ocr_extractions.py thumb_00-10.png
         """
     )
     parser.add_argument(
@@ -178,18 +201,18 @@ Examples:
     parser.add_argument(
         '--cpu',
         action='store_true',
-        help='Use CPU instead of GPU'
+        help='Use CPU instead of GPU (Note: DeepSeek-OCR-2 requires GPU, this flag is ignored)'
     )
     parser.add_argument(
         '-l', '--lang',
         default='en',
-        help='Language code (default: en)'
+        help='Language code (not used, DeepSeek is multilingual)'
     )
     
     args = parser.parse_args()
     
-    # Check PaddleOCR
-    if not check_paddleocr():
+    # Check dependencies
+    if not check_dependencies():
         sys.exit(1)
     
     try:

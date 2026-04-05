@@ -21,9 +21,12 @@ That should run all our various processors on the next unprocessed video (one wi
 
 Future:
 
+* Transcripts:
+  - Is there a better model?
+    * Maybe Whisper base can be improved upon?
+  - LLM post processing?  llama?  Deepseek?
 * OCR has been blocked thus far:
   * Easy OCR sucks
   * Paddle OCR, hasn't given results yet
-  * And there's a flaw in the basic idea of the ocr_extractions processor -- there are going to be too many thumbs to process (unless paddle is blazingly fast).  We probably need a processor to run first, which would output a short-list of thumbs to extract from -- possibly based on the subtitles (e.g. I say "Let's extract this text", and a thumb is created in to_ocr/)
-* Can llama clean up the subtitles?  Try making a processor for this...
-  - Is there a better model?
+  * DeepSeek OCR, haven't gotten it to install
+  * BUG: And there's a flaw in the basic idea of the ocr_extractions processor -- there are going to be too many thumbs to process (unless paddle is blazingly fast).  We probably need a processor to run first, which would output a short-list of thumbs to extract from -- possibly based on the subtitles (e.g. I say "Let's extract this text", and a thumb is created in to_ocr/)
