@@ -88,7 +88,7 @@ def count_videos_in_day(day_folder):
     """Count how many video subfolders exist in a day folder."""
     count = 0
     for item in day_folder.iterdir():
-        if item.is_dir() and not item.name.startswith('.') and item.name not in ['logs', 'show_all']:
+        if item.is_dir() and not item.name.startswith('.') and item.name not in ['logs', 'show_all', 'summaries']:
             count += 1
     return count
 

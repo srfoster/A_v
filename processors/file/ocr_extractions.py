@@ -44,81 +44,45 @@ def extract_text_from_image(image_path, use_gpu=True, lang='en'):
     try:
         from paddleocr import PaddleOCR
         
-        # Initialize PaddleOCR with document processing disabled
+        # Initialize with proper detection parameters at init time
+        # Lower thresholds significantly to maximize detection sensitivity
         ocr = PaddleOCR(
-            lang=lang,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False
-        )
-        
-        # Use predict() with very lenient detection parameters to maximize detection
-        result = ocr.predict(
-            str(image_path),
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
-            text_det_limit_side_len=1920,    # Higher resolution
-            text_det_limit_type="max",       
-            text_det_thresh=0.1,             # Much lower threshold (0.1 instead of 0.3)
-            text_det_box_thresh=0.3,         # Lower box threshold (0.3 instead of 0.5)
-            text_rec_score_thresh=0.3        # Lower recognition threshold
+            text_det_limit_side_len=1920,    # Fix the terrible default of 64!
+            text_det_limit_type='max',       # Use max not min
+            text_det_thresh=0.1,             # Lower from 0.3 to 0.1
+            text_det_box_thresh=0.3          # Lower from 0.5 to 0.3
         )
         
-        # Debug: Print full result structure
-        import json
+        # Use predict() with input parameter as per docs
+        result = ocr.predict(input=str(image_path))
+        
+        # Extract text using the result object methods
+        text_lines = []
+        
         print(f"\nDEBUG: Got {len(result)} result(s)")
         for idx, res in enumerate(result):
-            print(f"\nDEBUG: Result {idx} type: {type(res)}")
-            if isinstance(res, dict):
-                print(f"DEBUG: Result {idx} keys: {list(res.keys())}")
-                
-                # Check detection results
-                dt_polys = res.get('dt_polys', [])
-                print(f"DEBUG: Detected {len(dt_polys)} text regions (dt_polys)")
-                
-                # Check recognition results
-                rec_texts = res.get('rec_texts', [])
-                rec_scores = res.get('rec_scores', [])
-                print(f"DEBUG: Recognized {len(rec_texts)} text(s)")
-                
-                # Check important fields
-                if 'input_path' in res:
-                    print(f"DEBUG: Input path: {res['input_path']}")
-                if 'page_orientation' in res:
-                    orientation = res.get('page_orientation', {})
-                    if isinstance(orientation, dict):
-                        print(f"DEBUG: Page orientation angle: {orientation.get('angle', 'N/A')}")
-                    else:
-                        print(f"DEBUG: Page orientation: {orientation}")
-                
-                # Show detection parameters
-                det_params = res.get('text_det_params', {})
-                if det_params:
-                    print(f"DEBUG: Detection params: {json.dumps(det_params, indent=2)}")
-                
-                # Show a sample of the result for diagnosis (truncate large fields)
-                sample = {}
-                for k, v in res.items():
-                    if isinstance(v, (list, dict)):
-                        sample[k] = f"<{type(v).__name__} len={len(v)}>"
-                    elif isinstance(v, str) and len(v) > 100:
-                        sample[k] = v[:100] + "..."
-                    else:
-                        sample[k] = v
-                print(f"DEBUG: Result summary: {json.dumps(sample, indent=2, default=str)}")
-            else:
-                print(f"DEBUG: Result {idx}: {res}")
-        
-        # Extract text from results
-        text_lines = []
-        for idx, res in enumerate(result):
+            print(f"DEBUG: Result {idx} type: {type(res)}")
+            
+            # Use the object's methods as per docs
+            print("\nDEBUG: Calling res.print():")
+            res.print()
+            
+            # Try to access text data - result objects should have these attributes
+            if hasattr(res, 'rec_texts'):
+                texts = res.rec_texts
+                print(f"DEBUG: Found {len(texts)} texts via res.rec_texts")
+                text_lines.extend([str(t) for t in texts])
+            elif hasattr(res, '__dict__'):
+                print(f"DEBUG: Result attributes: {list(res.__dict__.keys())}")
+            
+            # Also try dict-style access since it worked before
             if isinstance(res, dict):
                 rec_texts = res.get('rec_texts', [])
-                rec_scores = res.get('rec_scores', [])
-                for text, score in zip(rec_texts, rec_scores):
-                    print(f"DEBUG: Text='{text}' (confidence: {score:.3f})")
-                    text_lines.append(str(text))
+                print(f"DEBUG: Found {len(rec_texts)} texts via dict access")
+                text_lines.extend([str(t) for t in rec_texts])
         
         extracted_text = '\n'.join(text_lines)
         print(f"\nExtracted {len(text_lines)} line(s) of text")
