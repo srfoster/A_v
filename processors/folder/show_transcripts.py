@@ -8,11 +8,11 @@ Usage:
     python show_transcripts.py FOLDER/
     
 Output:
-    For each FILE.srt in FOLDER/transcripts/:
-      FOLDER/show_transcripts/FILE.html
+    FOLDER/show_transcripts/index.html
       
-Each HTML page embeds the original video and provides clickable
-transcript lines that jump to the corresponding timestamp.
+The HTML page embeds videos and provides clickable transcript lines
+that jump to the corresponding timestamp. Select different videos
+using the dropdown menu.
 """
 
 import sys
@@ -140,29 +140,33 @@ def find_video_for_transcript(transcript_path, folder_path):
     return None
 
 
-def generate_html(srt_entries, video_path, output_path, transcript_name):
-    """Generate an interactive HTML page with video and transcript."""
+def generate_index_html(transcript_data, output_dir, folder_name):
+    """Generate a single index.html with all transcripts."""
     
-    # Create relative path from output HTML to video
-    # Both should be in the same parent folder structure
-    video_rel_path = f"../{video_path.name}"
+    # Build transcript data as JSON
+    transcripts_json = "[\n"
+    for i, data in enumerate(transcript_data):
+        if i > 0:
+            transcripts_json += ",\n"
+        
+        # Escape text for JSON
+        import json
+        entries_json = json.dumps(data['entries'])
+        
+        transcripts_json += f"""        {{
+            name: "{data['name']}",
+            videoPath: "../{data['video_name']}",
+            entries: {entries_json}
+        }}"""
     
-    # Build transcript HTML
-    transcript_html = ""
-    for entry in srt_entries:
-        transcript_html += f"""
-        <div class="transcript-line" data-time="{entry['start_seconds']}">
-            <span class="timestamp">{entry['start_time']}</span>
-            <span class="text">{entry['text']}</span>
-        </div>
-"""
+    transcripts_json += "\n    ]"
     
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{transcript_name} - Interactive Transcript</title>
+    <title>{folder_name} - Transcripts</title>
     <style>
         * {{
             margin: 0;
@@ -182,9 +186,37 @@ def generate_html(srt_entries, video_path, output_path, transcript_name):
             margin: 0 auto;
         }}
         
-        h1 {{
+        .header {{
             margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }}
+        
+        h1 {{
             color: #ffffff;
+            margin: 0;
+        }}
+        
+        .selector-container {{
+            flex: 1;
+            min-width: 250px;
+        }}
+        
+        select {{
+            width: 100%;
+            background: #252526;
+            color: #d4d4d4;
+            border: 1px solid #3e3e42;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+        }}
+        
+        select:hover {{
+            border-color: #0e639c;
         }}
         
         .content {{
@@ -281,13 +313,19 @@ def generate_html(srt_entries, video_path, output_path, transcript_name):
 </head>
 <body>
     <div class="container">
-        <h1>📹 {transcript_name}</h1>
+        <div class="header">
+            <h1>📹 {folder_name}</h1>
+            <div class="selector-container">
+                <select id="transcriptSelector" onchange="loadTranscript(this.value)">
+                </select>
+            </div>
+        </div>
         
         <div class="content">
             <div>
                 <div class="video-container">
                     <video id="videoPlayer" controls>
-                        <source src="{video_rel_path}" type="video/mp4">
+                        <source id="videoSource" src="" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
                 </div>
@@ -299,48 +337,84 @@ def generate_html(srt_entries, video_path, output_path, transcript_name):
             
             <div class="transcript-container" id="transcriptContainer">
                 <h3 style="margin-bottom: 15px; color: #ffffff;">Transcript</h3>
-                {transcript_html}
+                <div id="transcriptContent"></div>
             </div>
         </div>
     </div>
     
     <script>
-        const video = document.getElementById('videoPlayer');
-        const transcriptLines = document.querySelectorAll('.transcript-line');
-        const transcriptContainer = document.getElementById('transcriptContainer');
+        const transcripts = {transcripts_json};
         
-        // Click handler for transcript lines
-        transcriptLines.forEach(line => {{
-            line.addEventListener('click', () => {{
-                const time = parseFloat(line.dataset.time);
-                video.currentTime = time;
-                video.play();
-                
-                // Update active state
-                transcriptLines.forEach(l => l.classList.remove('active'));
-                line.classList.add('active');
-            }});
+        const video = document.getElementById('videoPlayer');
+        const videoSource = document.getElementById('videoSource');
+        const transcriptContainer = document.getElementById('transcriptContainer');
+        const transcriptContent = document.getElementById('transcriptContent');
+        const selector = document.getElementById('transcriptSelector');
+        
+        let currentTranscriptLines = [];
+        
+        // Populate selector
+        transcripts.forEach((t, index) => {{
+            const option = document.createElement('option');
+            option.value = index;
+            option.textContent = t.name;
+            selector.appendChild(option);
         }});
         
-        // Update active line as video plays
-        video.addEventListener('timeupdate', () => {{
+        function loadTranscript(index) {{
+            const transcript = transcripts[index];
+            
+            // Update video source
+            videoSource.src = transcript.videoPath;
+            video.load();
+            
+            // Clear transcript content
+            transcriptContent.innerHTML = '';
+            currentTranscriptLines = [];
+            
+            // Build transcript lines
+            transcript.entries.forEach(entry => {{
+                const line = document.createElement('div');
+                line.className = 'transcript-line';
+                line.dataset.time = entry.start_seconds;
+                
+                const timestamp = document.createElement('span');
+                timestamp.className = 'timestamp';
+                timestamp.textContent = entry.start_time;
+                
+                const text = document.createElement('span');
+                text.className = 'text';
+                text.textContent = entry.text;
+                
+                line.appendChild(timestamp);
+                line.appendChild(text);
+                
+                line.addEventListener('click', () => {{
+                    video.currentTime = parseFloat(line.dataset.time);
+                    video.play();
+                    updateActiveState();
+                }});
+                
+                transcriptContent.appendChild(line);
+                currentTranscriptLines.push(line);
+            }});
+        }}
+        
+        function updateActiveState() {{
             const currentTime = video.currentTime;
             
-            // Find the current transcript line
             let activeIndex = -1;
-            transcriptLines.forEach((line, index) => {{
+            currentTranscriptLines.forEach((line, index) => {{
                 const lineTime = parseFloat(line.dataset.time);
                 if (currentTime >= lineTime) {{
                     activeIndex = index;
                 }}
             }});
             
-            // Update active state
-            transcriptLines.forEach((line, index) => {{
+            currentTranscriptLines.forEach((line, index) => {{
                 if (index === activeIndex) {{
                     line.classList.add('active');
                     
-                    // Auto-scroll to keep active line visible
                     const lineTop = line.offsetTop;
                     const lineBottom = lineTop + line.offsetHeight;
                     const containerTop = transcriptContainer.scrollTop;
@@ -355,14 +429,26 @@ def generate_html(srt_entries, video_path, output_path, transcript_name):
                     line.classList.remove('active');
                 }}
             }});
-        }});
+        }}
+        
+        video.addEventListener('timeupdate', updateActiveState);
+        
+        // Load first transcript
+        if (transcripts.length > 0) {{
+            loadTranscript(0);
+        }}
     </script>
 </body>
 </html>
 """
     
-    with open(output_path, 'w', encoding='utf-8') as f:
+    index_path = output_dir / 'index.html'
+    with open(index_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
+    
+    return index_path
+
+
 
 
 def process_folder(folder_path, logger=None):
@@ -412,6 +498,7 @@ def process_folder(folder_path, logger=None):
     
     # Process each SRT file
     success_count = 0
+    transcript_data = []
     for srt_file in srt_files:
         try:
             if logger:
@@ -434,16 +521,17 @@ def process_folder(folder_path, logger=None):
             if logger:
                 logger.info(f"  Found video: {video_path.name}")
             
-            # Generate HTML
+            # Determine transcript name
             transcript_name = srt_file.stem
             if transcript_name.endswith('_transcript'):
                 transcript_name = transcript_name[:-11]
             
-            output_file = output_dir / f"{transcript_name}.html"
-            generate_html(entries, video_path, output_file, transcript_name)
-            
-            if logger:
-                logger.info(f"  Created: {output_file.name}")
+            # Collect data for index generation
+            transcript_data.append({
+                'name': transcript_name,
+                'video_name': video_path.name,
+                'entries': entries
+            })
             
             success_count += 1
             
@@ -453,6 +541,18 @@ def process_folder(folder_path, logger=None):
                 logger.error(error_msg)
             print(error_msg)
             continue
+    
+    # Generate single index page with all transcripts
+    if transcript_data:
+        try:
+            index_path = generate_index_html(transcript_data, output_dir, folder.name)
+            if logger:
+                logger.info(f"Created: {index_path.name}")
+        except Exception as e:
+            error_msg = f"Error creating index: {str(e)}"
+            if logger:
+                logger.error(error_msg)
+            print(error_msg)
     
     return success_count
 
@@ -468,7 +568,7 @@ Examples:
   python show_transcripts.py /path/to/folder/
 
 The folder must contain a transcripts/ subfolder with .srt files.
-Output HTML files will be created in show_transcripts/ subfolder.
+An index.html file will be created in show_transcripts/ subfolder.
         """
     )
     
@@ -498,11 +598,12 @@ Output HTML files will be created in show_transcripts/ subfolder.
         
         # Report results
         if count > 0:
-            success_msg = f"\n✓ Successfully created {count} HTML file(s) in {folder_path / 'show_transcripts'}"
+            output_file = folder_path / 'show_transcripts' / 'index.html'
+            success_msg = f"\n✓ Successfully created index.html with {count} transcript(s) at {output_file}"
             logger.info(success_msg)
             print(success_msg)
         else:
-            logger.info("No HTML files created")
+            logger.info("No transcripts processed")
         
         logger.info("="*60)
         logger.info("Session completed")

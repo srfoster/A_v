@@ -44,21 +44,30 @@ def extract_text_from_image(image_path, use_gpu=True, lang='en'):
     try:
         from paddleocr import PaddleOCR
         
-        # Initialize PaddleOCR with minimal parameters
-        # This version auto-detects GPU
-        ocr = PaddleOCR(lang=lang)
+        # Initialize PaddleOCR
+        ocr = PaddleOCR(
+            lang=lang,
+            device='gpu:0' if use_gpu else 'cpu'
+        )
         
-        # Perform OCR
-        result = ocr.ocr(str(image_path), cls=True)
+        # Perform OCR with doc preprocessor disabled to avoid rotation issues
+        result = ocr.predict(
+            str(image_path),
+            use_doc_preprocessor=False  # Disable auto-rotation
+        )
         
         # Extract text from results
-        # PaddleOCR returns: [[[bbox], (text, confidence)], ...]
+        # PaddleOCR 3.2.0 returns OCRResult objects
         text_lines = []
-        if result and result[0]:
-            for line in result[0]:
-                if len(line) >= 2:
-                    text = line[1][0]  # Get text from (text, confidence) tuple
-                    text_lines.append(text)
+        
+        if result:
+            for item in result:
+                # OCRResult object has rec_texts attribute
+                if hasattr(item, 'rec_texts') and item.rec_texts:
+                    text_lines.extend(item.rec_texts)
+                # Fallback for other formats
+                elif isinstance(item, dict) and 'rec_texts' in item:
+                    text_lines.extend(item['rec_texts'])
         
         extracted_text = '\n'.join(text_lines)
         print(f"Extracted {len(text_lines)} line(s) of text")
